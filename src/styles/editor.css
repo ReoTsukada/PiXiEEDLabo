@@ -1,0 +1,213 @@
+.editor-shell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  background: linear-gradient(160deg, #151515 0%, #0a0a0a 100%);
+  color: #f5f5f5;
+}
+
+.editor-shell__toolbar {
+  padding: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.editor-shell__viewport {
+  padding: 16px;
+  overflow: hidden;
+}
+
+.editor-shell__status {
+  padding: 8px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  display: flex;
+  gap: 16px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+@media (min-width: 960px) {
+  .editor-shell {
+    grid-template-columns: 280px 1fr;
+    grid-template-rows: 1fr auto;
+  }
+
+  .editor-shell__toolbar {
+    border-bottom: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .editor-shell__viewport {
+    grid-column: 2 / 3;
+    grid-row: 1 / 2;
+  }
+
+  .editor-shell__status {
+    grid-column: 1 / -1;
+  }
+}
+
+.toolbar {
+  display: grid;
+  gap: 12px;
+}
+
+.toolbar__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.toolbar__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toolbar__label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.64);
+}
+
+.toolbar__toggle-group {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 8px;
+}
+
+.toolbar__toggle {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.toolbar__toggle--active {
+  background: #58c4ff;
+  color: #0a0a0a;
+  border-color: transparent;
+}
+
+.toolbar__button {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.toolbar__value {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.viewport {
+  display: grid;
+  gap: 16px;
+  justify-items: center;
+  align-content: start;
+}
+
+.viewport__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 6px 12px;
+  border-radius: 12px;
+}
+
+.viewport__label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.64);
+}
+
+.viewport__value {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.viewport__stage {
+  position: relative;
+  padding: 16px;
+  background: radial-gradient(circle at top left, rgba(255, 255, 255, 0.06), transparent 60%);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.viewport__hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.pixel-canvas {
+  position: relative;
+  background-image: linear-gradient(45deg, #2b2b2b 25%, transparent 25%),
+    linear-gradient(-45deg, #2b2b2b 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2b2b2b 75%),
+    linear-gradient(-45deg, transparent 75%, #2b2b2b 75%);
+  background-size: 32px 32px;
+  background-position: 0 0, 0 16px, 16px -16px, -16px 0px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pixel-canvas__element {
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+.virtual-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  pointer-events: none;
+}
+
+.virtual-cursor__crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(88, 196, 255, 0.9);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 6px rgba(88, 196, 255, 0.6);
+}
+
+.virtual-cursor__action {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(88, 196, 255, 0.6);
+  background: rgba(10, 10, 10, 0.9);
+  color: #58c4ff;
+  cursor: pointer;
+}
+
+.status-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.status-bar span {
+  white-space: nowrap;
+}
