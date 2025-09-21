@@ -13,11 +13,15 @@ export default function App() {
   const [canvasSize] = useState<CanvasSize>(DEFAULT_CANVAS);
   const [zoom, setZoom] = useState(8);
   const [inputMode, setInputMode] = useState<InputMode>('direct');
-  const [toolState, setToolState] = useState<ToolState>({ color: '#58c4ff', brushSize: 1 });
+  const [toolState, setToolState] = useState<ToolState>({ tool: 'pen', color: '#58c4ff', brushSize: 1 });
   const [virtualCursor, setVirtualCursor] = useState<VirtualCursorState>({ x: 0, y: 0, visible: false });
 
   const handleClear = () => {
     canvasRef.current?.clear();
+  };
+
+  const handleColorSampled = (hex: string) => {
+    setToolState((prev) => ({ ...prev, color: hex }));
   };
 
   return (
@@ -57,6 +61,7 @@ export default function App() {
               toolState={toolState}
               virtualCursor={virtualCursor}
               onVirtualCursorChange={setVirtualCursor}
+              onColorSampled={handleColorSampled}
             />
           </div>
           {inputMode === 'virtual' && (
