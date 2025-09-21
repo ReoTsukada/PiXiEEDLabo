@@ -5,7 +5,10 @@ export interface CanvasSize {
   height: number;
 }
 
+export type ToolKind = 'pen' | 'eraser' | 'eyedropper';
+
 export interface ToolState {
+  tool: ToolKind;
   color: string;
   brushSize: number;
 }
