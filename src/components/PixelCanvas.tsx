@@ -15,12 +15,13 @@ interface PixelCanvasProps {
   toolState: ToolState;
   virtualCursor: VirtualCursorState;
   onVirtualCursorChange: (cursor: VirtualCursorState) => void;
+  onColorSampled: (hex: string) => void;
 }
 
 export const PixelCanvas = forwardRef<PixelCanvasHandle, PixelCanvasProps>(
-  ({ size, zoom, inputMode, toolState, virtualCursor, onVirtualCursorChange }, ref) => {
+  ({ size, zoom, inputMode, toolState, virtualCursor, onVirtualCursorChange, onColorSampled }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const { data, setPixel, clear } = usePixelBuffer(size);
+    const { data, setPixel, getPixel, clear } = usePixelBuffer(size);
     const imageDataRef = useRef<ImageData>();
     const [isPointerDown, setIsPointerDown] = useState(false);
 
@@ -32,6 +33,11 @@ export const PixelCanvas = forwardRef<PixelCanvasHandle, PixelCanvasProps>(
       const b = bigint & 255;
       return [r, g, b, 255] as [number, number, number, number];
     }, [toolState.color]);
+
+    const eraserColor: [number, number, number, number] = [0, 0, 0, 0];
+
+    const rgbaToHex = (rgba: [number, number, number, number]) =>
+      `#${[rgba[0], rgba[1], rgba[2]].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
 
     const ensureCanvas = useCallback(() => {
       const canvas = canvasRef.current;
@@ -50,16 +56,16 @@ export const PixelCanvas = forwardRef<PixelCanvasHandle, PixelCanvasProps>(
     }, [data, ensureCanvas, size.height, size.width]);
 
     const drawAt = useCallback(
-      (x: number, y: number) => {
+      (x: number, y: number, rgba: [number, number, number, number]) => {
         const radius = Math.max(0, Math.floor((toolState.brushSize - 1) / 2));
         for (let py = y - radius; py <= y + radius; py += 1) {
           for (let px = x - radius; px <= x + radius; px += 1) {
-            setPixel(px, py, rgbaColor);
+            setPixel(px, py, rgba);
           }
         }
         refreshImageData();
       },
-      [rgbaColor, refreshImageData, setPixel, toolState.brushSize]
+      [refreshImageData, setPixel, toolState.brushSize]
     );
 
     const pointerToPixel = useCallback(
@@ -77,6 +83,29 @@ export const PixelCanvas = forwardRef<PixelCanvasHandle, PixelCanvasProps>(
         return { x, y };
       },
       [size.height, size.width]
+    );
+
+    const applyToolAt = useCallback(
+      (x: number, y: number) => {
+        if (toolState.tool === 'pen') {
+          drawAt(x, y, rgbaColor);
+          return;
+        }
+
+        if (toolState.tool === 'eraser') {
+          drawAt(x, y, eraserColor);
+          return;
+        }
+
+        if (toolState.tool === 'eyedropper') {
+          const sampled = getPixel(x, y);
+          if (!sampled || sampled[3] === 0) {
+            return;
+          }
+          onColorSampled(rgbaToHex(sampled));
+        }
+      },
+      [drawAt, eraserColor, getPixel, onColorSampled, rgbaColor, rgbaToHex, toolState.tool]
     );
 
     const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
