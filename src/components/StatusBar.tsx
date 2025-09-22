@@ -5,13 +5,15 @@ interface StatusBarProps {
   zoom: number;
   inputMode: InputMode;
   virtualCursor: VirtualCursorState;
+  activeLayerName: string;
 }
 
-export function StatusBar({ size, zoom, inputMode, virtualCursor }: StatusBarProps) {
+export function StatusBar({ size, zoom, inputMode, virtualCursor, activeLayerName }: StatusBarProps) {
   return (
     <div className="status-bar">
       <span>キャンバス: {size.width}×{size.height}</span>
       <span>ズーム: {zoom}倍</span>
+      <span>レイヤー: {activeLayerName}</span>
       <span>モード: {inputMode === 'direct' ? '直接描画' : '仮想カーソル'}</span>
       {inputMode === 'virtual' && virtualCursor.visible && (
         <span>
