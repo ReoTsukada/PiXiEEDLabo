@@ -31,6 +31,7 @@ const ZOOM_LIMITS = {
 };
 const ZOOM_WHEEL_FACTOR = 0.08;
 const MAX_EXPORT_DIMENSION = 1024;
+const FIXED_PIXEL_SIZE = 20;
 
 const ctx = pixelCanvas.getContext('2d', { willReadFrequently: true });
 const previewCtx = previewCanvas.getContext('2d', { willReadFrequently: true });
@@ -44,10 +45,18 @@ colorPicker.className = 'sr-only';
 colorPicker.tabIndex = -1;
 document.body.appendChild(colorPicker);
 
+if (pixelSizeInput) {
+  pixelSizeInput.value = String(FIXED_PIXEL_SIZE);
+  pixelSizeInput.min = String(FIXED_PIXEL_SIZE);
+  pixelSizeInput.max = String(FIXED_PIXEL_SIZE);
+  pixelSizeInput.disabled = true;
+  pixelSizeInput.setAttribute('aria-disabled', 'true');
+}
+
 const state = {
   width: Number(widthInput.value) || 32,
   height: Number(heightInput.value) || 32,
-  pixelSize: Number(pixelSizeInput.value) || 2,
+  pixelSize: FIXED_PIXEL_SIZE,
   brushSize: Number(brushSizeInput.value) || 1,
   tool: 'pen',
   color: colorPicker.value,
@@ -156,9 +165,17 @@ function getOffsetBounds(wrapperSize, scaledSize) {
   if (scaledSize <= 0 || wrapperSize <= 0) {
     return { min: 0, max: 0 };
   }
+  if (scaledSize <= wrapperSize) {
+    const maxOffset = wrapperSize - scaledSize;
+    return {
+      min: 0,
+      max: maxOffset,
+    };
+  }
+  const minOffset = wrapperSize - scaledSize;
   return {
-    min: -scaledSize,
-    max: wrapperSize,
+    min: minOffset,
+    max: 0,
   };
 }
 
@@ -229,6 +246,15 @@ function fitZoomToContainer() {
   const fitZoom = Math.min(availableWidth / baseWidth, availableHeight / baseHeight, ZOOM_LIMITS.max);
   state.minZoom = Math.max(fitZoom / 4, ZOOM_LIMITS.min);
   setZoom(fitZoom);
+}
+
+function ensureCanvasCentered() {
+  fitZoomToContainer();
+  window.requestAnimationFrame(() => {
+    if (!userAdjustedZoom) {
+      fitZoomToContainer();
+    }
+  });
 }
 
 function clampOffsets() {
@@ -684,10 +710,11 @@ function updateBrushSize(value) {
   brushSizeDisplay.textContent = String(size);
 }
 
-function updatePixelSize(value) {
-  const size = clamp(Number(value) || state.pixelSize, Number(pixelSizeInput.min), Number(pixelSizeInput.max));
-  state.pixelSize = size;
-  pixelSizeInput.value = String(size);
+function updatePixelSize() {
+  state.pixelSize = FIXED_PIXEL_SIZE;
+  if (pixelSizeInput) {
+    pixelSizeInput.value = String(FIXED_PIXEL_SIZE);
+  }
   applyCanvasDisplaySize();
   if (!userAdjustedZoom) {
     fitZoomToContainer();
@@ -852,7 +879,7 @@ function resizeCanvas(newWidth, newHeight) {
   state.height = clampedHeight;
   widthInput.value = String(clampedWidth);
   heightInput.value = String(clampedHeight);
-  updatePixelSize(state.pixelSize);
+  updatePixelSize();
   updateDotCount();
   refreshExportOptions();
 }
@@ -973,8 +1000,8 @@ function initEvents() {
   pixelCanvas.addEventListener('pointercancel', handlePointerUp);
   window.addEventListener('pointerup', handlePointerUp);
 
-  pixelSizeInput.addEventListener('input', (event) => updatePixelSize((event.target).value));
-  pixelSizeInput.addEventListener('change', (event) => updatePixelSize((event.target).value));
+  pixelSizeInput.addEventListener('input', () => updatePixelSize());
+  pixelSizeInput.addEventListener('change', () => updatePixelSize());
 
   brushSizeInput.addEventListener('input', (event) => updateBrushSize((event.target).value));
   brushSizeInput.addEventListener('change', (event) => updateBrushSize((event.target).value));
@@ -1068,7 +1095,7 @@ function init() {
   initPalette();
   setActiveTool(state.tool);
   updateBrushSize(state.brushSize);
-  updatePixelSize(state.pixelSize);
+  updatePixelSize();
   updateDotCount();
   renderPreview();
   closeActivePanel();
@@ -1076,9 +1103,7 @@ function init() {
   if (!userMovedDock) {
     alignDockForViewport();
   }
-  applyCanvasDisplaySize();
-  fitZoomToContainer();
-  applyCanvasZoom();
+  ensureCanvasCentered();
   refreshExportOptions();
   initDockDrag();
   initZoomControls();
