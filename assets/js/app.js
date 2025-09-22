@@ -149,6 +149,19 @@ function applyCanvasZoom() {
   canvasStage.style.setProperty('--canvas-offset-y', `${state.offsetY}px`);
 }
 
+function getOffsetBounds(wrapperSize, scaledSize) {
+  if (!Number.isFinite(wrapperSize) || !Number.isFinite(scaledSize)) {
+    return { min: 0, max: 0 };
+  }
+  if (scaledSize <= 0 || wrapperSize <= 0) {
+    return { min: 0, max: 0 };
+  }
+  return {
+    min: -scaledSize,
+    max: wrapperSize,
+  };
+}
+
 function setZoom(value, options = {}) {
   const { fromUser = false, focus } = options;
   const minAllowed = Math.max(state.minZoom || ZOOM_LIMITS.min, ZOOM_LIMITS.min);
@@ -166,12 +179,18 @@ function setZoom(value, options = {}) {
     if (metrics) {
       const localX = focus.x - metrics.rect.left;
       const localY = focus.y - metrics.rect.top;
-      const centerX = metrics.rect.width / 2;
-      const centerY = metrics.rect.height / 2;
       const worldX = (localX - state.offsetX) / previousZoom;
       const worldY = (localY - state.offsetY) / previousZoom;
-      state.offsetX = centerX - clampedValue * worldX;
-      state.offsetY = centerY - clampedValue * worldY;
+      const scaledWidth = state.width * state.pixelSize * clampedValue;
+      const scaledHeight = state.height * state.pixelSize * clampedValue;
+      let nextOffsetX = localX - clampedValue * worldX;
+      let nextOffsetY = localY - clampedValue * worldY;
+      const { min: minOffsetX, max: maxOffsetX } = getOffsetBounds(metrics.rect.width, scaledWidth);
+      const { min: minOffsetY, max: maxOffsetY } = getOffsetBounds(metrics.rect.height, scaledHeight);
+      nextOffsetX = clamp(nextOffsetX, minOffsetX, maxOffsetX);
+      nextOffsetY = clamp(nextOffsetY, minOffsetY, maxOffsetY);
+      state.offsetX = nextOffsetX;
+      state.offsetY = nextOffsetY;
     }
   } else if (!fromUser) {
     const metrics = getWrapperMetrics();
@@ -228,16 +247,10 @@ function clampOffsets() {
     state.offsetY = 0;
     return;
   }
-  if (scaledWidth > wrapperWidth) {
-    const minOffsetX = wrapperWidth - scaledWidth;
-    const maxOffsetX = 0;
-    state.offsetX = clamp(state.offsetX, minOffsetX, maxOffsetX);
-  }
-  if (scaledHeight > wrapperHeight) {
-    const minOffsetY = wrapperHeight - scaledHeight;
-    const maxOffsetY = 0;
-    state.offsetY = clamp(state.offsetY, minOffsetY, maxOffsetY);
-  }
+  const { min: minOffsetX, max: maxOffsetX } = getOffsetBounds(wrapperWidth, scaledWidth);
+  const { min: minOffsetY, max: maxOffsetY } = getOffsetBounds(wrapperHeight, scaledHeight);
+  state.offsetX = clamp(state.offsetX, minOffsetX, maxOffsetX);
+  state.offsetY = clamp(state.offsetY, minOffsetY, maxOffsetY);
 }
 
 let lastExportMultiplier = 1;
