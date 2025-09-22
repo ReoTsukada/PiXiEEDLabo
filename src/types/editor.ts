@@ -18,3 +18,9 @@ export interface VirtualCursorState {
   y: number;
   visible: boolean;
 }
+
+export interface LayerMeta {
+  id: string;
+  name: string;
+  visible: boolean;
+}
