@@ -12,7 +12,7 @@ const cursorInfo = document.getElementById('cursorInfo');
 const layerInfo = document.getElementById('layerInfo');
 const resizeCanvasButton = document.getElementById('resizeCanvas');
 const clearCanvasButton = document.getElementById('clearCanvas');
-const toolButtons = Array.from(document.querySelectorAll('.tool-button'));
+const toolButtons = Array.from(document.querySelectorAll('.tool-button[data-tool]'));
 const panelOverlay = document.getElementById('panelOverlay');
 const floatingPanels = Array.from(document.querySelectorAll('.floating-panel'));
 const panelToggleButtons = Array.from(document.querySelectorAll('[data-panel-target]'));
@@ -24,6 +24,7 @@ const exportPanel = document.getElementById('exportPanel');
 const exportSizeSelect = document.getElementById('exportSize');
 const exportHint = document.getElementById('exportHint');
 const exportConfirmButton = document.getElementById('confirmExport');
+const virtualCursorToggle = document.querySelector('[data-toggle="virtualCursor"]');
 const ZOOM_LIMITS = {
   min: 0.1,
   max: 24,
@@ -65,6 +66,30 @@ const state = {
   offsetX: 0,
   offsetY: 0,
 };
+
+const HAS_TOUCH_SUPPORT =
+  typeof navigator !== 'undefined' &&
+  (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches));
+
+const virtualCursorState = {
+  enabled: false,
+  x: Math.floor(state.width / 2),
+  y: Math.floor(state.height / 2),
+  pointerId: null,
+  drawActive: false,
+  drawButtonPointerId: null,
+  dragging: false,
+  dragPointerId: null,
+  dragOffsetX: 0,
+  dragOffsetY: 0,
+  controlLeft: null,
+  controlTop: null,
+};
+
+let virtualCursorElement = null;
+let virtualDrawControl = null;
+let virtualDrawHandle = null;
+let virtualDrawActionButton = null;
 
 let activeSwatch = null;
 let isDrawing = false;
@@ -147,6 +172,7 @@ function applyCanvasDisplaySize() {
   }
   clampOffsets();
   applyCanvasZoom();
+  updateVirtualCursorVisualPosition();
 }
 
 function applyCanvasZoom() {
@@ -156,6 +182,7 @@ function applyCanvasZoom() {
   canvasStage.style.setProperty('--canvas-scale', state.zoom);
   canvasStage.style.setProperty('--canvas-offset-x', `${state.offsetX}px`);
   canvasStage.style.setProperty('--canvas-offset-y', `${state.offsetY}px`);
+  updateVirtualCursorVisualPosition();
 }
 
 function getOffsetBounds(wrapperSize, scaledSize) {
@@ -253,6 +280,273 @@ function ensureCanvasCentered() {
   window.requestAnimationFrame(() => {
     if (!userAdjustedZoom) {
       fitZoomToContainer();
+    }
+  });
+}
+
+function ensureVirtualControlPosition() {
+  if (!virtualDrawControl) {
+    return;
+  }
+  const width = virtualDrawControl.offsetWidth || 160;
+  const height = virtualDrawControl.offsetHeight || 56;
+  const maxLeft = Math.max(12, window.innerWidth - width - 12);
+  const maxTop = Math.max(12, window.innerHeight - height - 12);
+  const targetLeft = virtualCursorState.controlLeft ?? maxLeft;
+  const targetTop = virtualCursorState.controlTop ?? maxTop;
+  setVirtualControlPosition(targetLeft, targetTop);
+}
+
+function updateVirtualCursorVisualPosition() {
+  if (!virtualCursorElement || !virtualCursorState.enabled) {
+    return;
+  }
+  const pixelOffsetX = (virtualCursorState.x + 0.5) * state.pixelSize;
+  const pixelOffsetY = (virtualCursorState.y + 0.5) * state.pixelSize;
+  virtualCursorElement.style.left = `${pixelOffsetX}px`;
+  virtualCursorElement.style.top = `${pixelOffsetY}px`;
+}
+
+function updateVirtualCursorPosition(x, y, options = {}) {
+  if (!virtualCursorState.enabled) {
+    return;
+  }
+  const clampedX = clamp(Math.round(x), 0, Math.max(0, state.width - 1));
+  const clampedY = clamp(Math.round(y), 0, Math.max(0, state.height - 1));
+  virtualCursorState.x = clampedX;
+  virtualCursorState.y = clampedY;
+  updateVirtualCursorVisualPosition();
+  if (!options.silent) {
+    updateCursorInfo(clampedX, clampedY);
+  }
+  if (virtualCursorState.drawActive) {
+    continueVirtualDrawing();
+  }
+}
+
+function setVirtualControlPosition(left, top) {
+  if (!virtualDrawControl) {
+    return;
+  }
+  const width = virtualDrawControl.offsetWidth || 0;
+  const height = virtualDrawControl.offsetHeight || 0;
+  const maxLeft = Math.max(12, window.innerWidth - width - 12);
+  const maxTop = Math.max(12, window.innerHeight - height - 12);
+  const clampedLeft = clamp(left, 12, maxLeft);
+  const clampedTop = clamp(top, 12, maxTop);
+  virtualDrawControl.style.left = `${clampedLeft}px`;
+  virtualDrawControl.style.top = `${clampedTop}px`;
+  virtualCursorState.controlLeft = clampedLeft;
+  virtualCursorState.controlTop = clampedTop;
+}
+
+function endVirtualDrag() {
+  if (!virtualDrawHandle) {
+    return;
+  }
+  if (virtualCursorState.dragPointerId !== null) {
+    try {
+      virtualDrawHandle.releasePointerCapture(virtualCursorState.dragPointerId);
+    } catch (_) {
+      // noop
+    }
+  }
+  virtualCursorState.dragging = false;
+  virtualCursorState.dragPointerId = null;
+  virtualDrawHandle.classList.remove('virtual-draw-control__handle--dragging');
+}
+
+function endVirtualDrawing() {
+  virtualCursorState.drawActive = false;
+  if (virtualDrawActionButton) {
+    if (
+      virtualCursorState.drawButtonPointerId !== null &&
+      typeof virtualDrawActionButton.releasePointerCapture === 'function'
+    ) {
+      try {
+        virtualDrawActionButton.releasePointerCapture(virtualCursorState.drawButtonPointerId);
+      } catch (_) {
+        // noop
+      }
+    }
+    virtualDrawActionButton.classList.remove('virtual-draw-control__action--active');
+  }
+  virtualCursorState.drawButtonPointerId = null;
+  if (isDrawing) {
+    isDrawing = false;
+  }
+}
+
+function continueVirtualDrawing() {
+  if (!virtualCursorState.drawActive || !isDrawing) {
+    return;
+  }
+  if (state.tool === 'pen') {
+    drawBrush(virtualCursorState.x, virtualCursorState.y);
+  } else if (state.tool === 'eraser') {
+    eraseBrush(virtualCursorState.x, virtualCursorState.y);
+  } else {
+    return;
+  }
+  renderPreview();
+  updateDotCount();
+}
+
+function startVirtualDrawing() {
+  if (!virtualCursorState.enabled) {
+    return;
+  }
+  const { x, y } = virtualCursorState;
+  if (state.tool === 'pen') {
+    isDrawing = true;
+    virtualCursorState.drawActive = true;
+    drawBrush(x, y);
+    renderPreview();
+    updateDotCount();
+  } else if (state.tool === 'eraser') {
+    isDrawing = true;
+    virtualCursorState.drawActive = true;
+    eraseBrush(x, y);
+    renderPreview();
+    updateDotCount();
+  } else if (state.tool === 'eyedropper') {
+    const sampled = getPixelColor(x, y);
+    if (sampled) {
+      setActiveColor(sampled);
+    }
+    virtualCursorState.drawActive = false;
+  } else if (state.tool === 'fill') {
+    floodFill(x, y, state.color);
+    renderPreview();
+    updateDotCount();
+    virtualCursorState.drawActive = false;
+  } else {
+    virtualCursorState.drawActive = false;
+  }
+}
+
+function setVirtualCursorEnabled(enabled) {
+  const shouldEnable = Boolean(enabled);
+  if (virtualCursorState.enabled === shouldEnable) {
+    return;
+  }
+  virtualCursorState.enabled = shouldEnable;
+  if (virtualCursorToggle) {
+    virtualCursorToggle.classList.toggle('tool-button--active', shouldEnable);
+  }
+  if (!virtualCursorElement || !virtualDrawControl) {
+    initVirtualCursorUI();
+  }
+  if (!HAS_TOUCH_SUPPORT) {
+    return;
+  }
+  if (virtualCursorElement) {
+    virtualCursorElement.dataset.visible = shouldEnable ? 'true' : 'false';
+  }
+  if (virtualDrawControl) {
+    virtualDrawControl.dataset.visible = shouldEnable ? 'true' : 'false';
+  }
+  if (!shouldEnable) {
+    if (
+      virtualCursorState.pointerId !== null &&
+      typeof pixelCanvas.releasePointerCapture === 'function' &&
+      typeof pixelCanvas.hasPointerCapture === 'function' &&
+      pixelCanvas.hasPointerCapture(virtualCursorState.pointerId)
+    ) {
+      pixelCanvas.releasePointerCapture(virtualCursorState.pointerId);
+    }
+    endVirtualDrawing();
+    virtualCursorState.pointerId = null;
+    updateCursorInfo();
+    return;
+  }
+  updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: false });
+  ensureVirtualControlPosition();
+}
+
+function initVirtualCursorUI() {
+  if (!canvasStage || virtualCursorElement) {
+    return;
+  }
+  virtualCursorElement = document.createElement('div');
+  virtualCursorElement.className = 'virtual-cursor';
+  virtualCursorElement.dataset.visible = 'false';
+  canvasStage.appendChild(virtualCursorElement);
+
+  virtualDrawControl = document.createElement('div');
+  virtualDrawControl.className = 'virtual-draw-control';
+  virtualDrawControl.dataset.visible = 'false';
+
+  virtualDrawHandle = document.createElement('button');
+  virtualDrawHandle.type = 'button';
+  virtualDrawHandle.className = 'virtual-draw-control__handle';
+  virtualDrawHandle.setAttribute('aria-label', '仮想カーソルボタンを移動');
+  virtualDrawHandle.innerHTML = '<span aria-hidden="true">⋮⋮</span>';
+
+  virtualDrawActionButton = document.createElement('button');
+  virtualDrawActionButton.type = 'button';
+  virtualDrawActionButton.className = 'virtual-draw-control__action';
+  virtualDrawActionButton.textContent = '描画';
+
+  virtualDrawControl.appendChild(virtualDrawHandle);
+  virtualDrawControl.appendChild(virtualDrawActionButton);
+
+  const host = document.querySelector('.app-stage') || document.body;
+  host.appendChild(virtualDrawControl);
+
+  virtualDrawHandle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    virtualCursorState.dragging = true;
+    virtualCursorState.dragPointerId = event.pointerId;
+    const rect = virtualDrawControl.getBoundingClientRect();
+    virtualCursorState.dragOffsetX = event.clientX - rect.left;
+    virtualCursorState.dragOffsetY = event.clientY - rect.top;
+    virtualDrawHandle.classList.add('virtual-draw-control__handle--dragging');
+    try {
+      virtualDrawHandle.setPointerCapture(event.pointerId);
+    } catch (_) {
+      // noop
+    }
+  });
+
+  virtualDrawHandle.addEventListener('pointermove', (event) => {
+    if (!virtualCursorState.dragging || event.pointerId !== virtualCursorState.dragPointerId) {
+      return;
+    }
+    setVirtualControlPosition(event.clientX - virtualCursorState.dragOffsetX, event.clientY - virtualCursorState.dragOffsetY);
+  });
+
+  virtualDrawHandle.addEventListener('pointerup', endVirtualDrag);
+  virtualDrawHandle.addEventListener('pointercancel', endVirtualDrag);
+
+  virtualDrawActionButton.addEventListener('pointerdown', (event) => {
+    if (!virtualCursorState.enabled) {
+      return;
+    }
+    event.preventDefault();
+    virtualCursorState.drawButtonPointerId = event.pointerId;
+    virtualDrawActionButton.classList.add('virtual-draw-control__action--active');
+    try {
+      virtualDrawActionButton.setPointerCapture(event.pointerId);
+    } catch (_) {
+      // noop
+    }
+    startVirtualDrawing();
+  });
+
+  const finishVirtualButtonPress = (event) => {
+    if (virtualCursorState.drawButtonPointerId !== null && event.pointerId !== virtualCursorState.drawButtonPointerId) {
+      return;
+    }
+    endVirtualDrawing();
+  };
+
+  virtualDrawActionButton.addEventListener('pointerup', finishVirtualButtonPress);
+  virtualDrawActionButton.addEventListener('pointercancel', finishVirtualButtonPress);
+
+  window.addEventListener('resize', () => {
+    if (virtualCursorState.enabled) {
+      ensureVirtualControlPosition();
     }
   });
 }
@@ -882,6 +1176,9 @@ function resizeCanvas(newWidth, newHeight) {
   updatePixelSize();
   updateDotCount();
   refreshExportOptions();
+  if (virtualCursorState.enabled) {
+    updateVirtualCursorPosition(virtualCursorState.x, virtualCursorState.y);
+  }
 }
 
 function clearCanvas() {
@@ -913,6 +1210,25 @@ function exportImage(multiplier = 1) {
 
 function handlePointerDown(event) {
   event.preventDefault();
+  if (virtualCursorState.enabled && event.pointerType === 'touch') {
+    if (zoomPointers.size >= 2) {
+      return;
+    }
+    const position = getPointerPosition(event);
+    if (!position.inBounds) {
+      return;
+    }
+    virtualCursorState.pointerId = event.pointerId;
+    updateVirtualCursorPosition(position.x, position.y);
+    if (typeof pixelCanvas.setPointerCapture === 'function') {
+      try {
+        pixelCanvas.setPointerCapture(event.pointerId);
+      } catch (_) {
+        // noop
+      }
+    }
+    return;
+  }
   if (event.pointerType === 'touch' && zoomPointers.size >= 2) {
     return;
   }
@@ -952,6 +1268,15 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event) {
+  if (virtualCursorState.enabled && event.pointerType === 'touch') {
+    if (event.pointerId === virtualCursorState.pointerId) {
+      const position = getPointerPosition(event);
+      if (position.inBounds) {
+        updateVirtualCursorPosition(position.x, position.y);
+      }
+    }
+    return;
+  }
   if (event.pointerType === 'touch' && zoomPointers.size >= 2) {
     return;
   }
@@ -975,7 +1300,20 @@ function handlePointerMove(event) {
   updateDotCount();
 }
 
-function handlePointerUp() {
+function handlePointerUp(event) {
+  if (
+    virtualCursorState.enabled &&
+    event &&
+    event.pointerId === virtualCursorState.pointerId &&
+    typeof pixelCanvas.releasePointerCapture === 'function' &&
+    typeof pixelCanvas.hasPointerCapture === 'function'
+  ) {
+    if (pixelCanvas.hasPointerCapture(event.pointerId)) {
+      pixelCanvas.releasePointerCapture(event.pointerId);
+    }
+    virtualCursorState.pointerId = null;
+    return;
+  }
   if (
     activePointerId !== null &&
     typeof pixelCanvas.releasePointerCapture === 'function' &&
@@ -1087,12 +1425,19 @@ function initEvents() {
       setDockCollapsed(!dockCollapsed);
     });
   }
+
+  if (virtualCursorToggle) {
+    virtualCursorToggle.addEventListener('click', () => {
+      setVirtualCursorEnabled(!virtualCursorState.enabled);
+    });
+  }
 }
 
 function init() {
   pixelCanvas.style.cursor = 'crosshair';
   pixelCanvas.style.touchAction = 'none';
   initPalette();
+  initVirtualCursorUI();
   setActiveTool(state.tool);
   updateBrushSize(state.brushSize);
   updatePixelSize();
