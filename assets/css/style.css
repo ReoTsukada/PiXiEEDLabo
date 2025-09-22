@@ -328,6 +328,83 @@ body {
   opacity: 0.35;
 }
 
+.virtual-cursor {
+  position: absolute;
+  width: calc(var(--pixel-cell) * 1.15);
+  height: calc(var(--pixel-cell) * 1.15);
+  margin: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  box-shadow: 0 0 14px rgba(88, 196, 255, 0.48);
+  background: rgba(88, 196, 255, 0.08);
+  opacity: 0;
+  transition: opacity 140ms ease;
+  z-index: 4;
+}
+
+.virtual-cursor[data-visible='true'] {
+  opacity: 1;
+}
+
+.virtual-draw-control {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(17, 23, 28, 0.88);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px);
+  z-index: 56;
+  transition: opacity 140ms ease;
+}
+
+.virtual-draw-control[data-visible='false'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.virtual-draw-control__handle {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  user-select: none;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.virtual-draw-control__handle--dragging {
+  cursor: grabbing;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.virtual-draw-control__action {
+  border-radius: 12px;
+  border: 1px solid rgba(88, 196, 255, 0.4);
+  background: rgba(88, 196, 255, 0.22);
+  color: var(--fg);
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.virtual-draw-control__action:active,
+.virtual-draw-control__action--active {
+  transform: translateY(1px);
+  background: rgba(88, 196, 255, 0.32);
+}
+
 #pixelCanvas {
   image-rendering: pixelated;
   background: transparent;
