@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PiXiEED Pocket</title>
+    <link rel="stylesheet" href="assets/css/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1 class="app-title">PiXiEED Pocket</h1>
+      <div class="app-actions">
+        <button id="exportImage" class="button">PNG書き出し</button>
+        <button id="clearCanvas" class="button button--danger">全消去</button>
+      </div>
+    </header>
+
+    <main class="app-layout">
+      <aside class="panel panel--left">
+        <section class="panel-section">
+          <h2>キャンバス</h2>
+          <label class="field">
+            <span>ドットサイズ</span>
+            <input id="pixelSize" type="number" value="16" min="4" max="64" step="4" />
+          </label>
+          <label class="field">
+            <span>横幅(ピクセル)</span>
+            <input id="canvasWidth" type="number" value="32" min="8" max="128" />
+          </label>
+          <label class="field">
+            <span>縦幅(ピクセル)</span>
+            <input id="canvasHeight" type="number" value="32" min="8" max="128" />
+          </label>
+          <button id="resizeCanvas" class="button button--secondary">サイズ反映</button>
+        </section>
+
+        <section class="panel-section">
+          <h2>ツールボックス</h2>
+          <div class="tool-grid" role="group" aria-label="描画ツール">
+            <button class="tool-button tool-button--active" data-tool="pen">ペン</button>
+            <button class="tool-button" data-tool="eraser">消しゴム</button>
+            <button class="tool-button" data-tool="eyedropper">スポイト</button>
+            <button class="tool-button" data-tool="fill">塗りつぶし</button>
+          </div>
+          <label class="field field--inline">
+            <span>ブラシ</span>
+            <input id="brushSize" type="range" min="1" max="8" value="1" />
+            <span id="brushSizeDisplay" class="value-tag">1</span>
+          </label>
+        </section>
+
+        <section class="panel-section">
+          <h2>カラーパレット</h2>
+          <div class="swatch-grid" id="palette"></div>
+          <label class="field field--inline">
+            <span>カスタム</span>
+            <input id="customColor" type="color" value="#58c4ff" />
+          </label>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <div class="workspace-toolbar">
+          <span class="workspace-info" id="cursorInfo">カーソル: -- , --</span>
+          <span class="workspace-info" id="layerInfo">ドット数: 0</span>
+        </div>
+        <div class="canvas-wrapper">
+          <canvas id="pixelCanvas" width="32" height="32"></canvas>
+          <canvas id="previewCanvas" width="32" height="32" aria-hidden="true"></canvas>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <small>© 2024 PiXiEED Labo</small>
+    </footer>
+
+    <script type="module" src="assets/js/app.js"></script>
+  </body>
+</html>
