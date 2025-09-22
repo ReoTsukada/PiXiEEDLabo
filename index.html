@@ -3,78 +3,223 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PiXiEED Pocket</title>
+    <title>PiXiEEDraw</title>
     <link rel="stylesheet" href="assets/css/style.css" />
   </head>
   <body>
-    <header class="app-header">
-      <h1 class="app-title">PiXiEED Pocket</h1>
-      <div class="app-actions">
-        <button id="exportImage" class="button">PNG書き出し</button>
-        <button id="clearCanvas" class="button button--danger">全消去</button>
+    <div class="app-stage">
+      <div class="canvas-wrapper">
+        <div class="canvas-stage" id="canvasStage">
+          <canvas id="pixelCanvas" width="32" height="32"></canvas>
+        </div>
+        <canvas id="previewCanvas" width="32" height="32" aria-hidden="true"></canvas>
       </div>
-    </header>
 
-    <main class="app-layout">
-      <aside class="panel panel--left">
-        <section class="panel-section">
-          <h2>キャンバス</h2>
-          <label class="field">
-            <span>ドットサイズ</span>
-            <input id="pixelSize" type="number" value="16" min="4" max="64" step="4" />
-          </label>
-          <label class="field">
-            <span>横幅(ピクセル)</span>
-            <input id="canvasWidth" type="number" value="32" min="8" max="128" />
-          </label>
-          <label class="field">
-            <span>縦幅(ピクセル)</span>
-            <input id="canvasHeight" type="number" value="32" min="8" max="128" />
-          </label>
-          <button id="resizeCanvas" class="button button--secondary">サイズ反映</button>
-        </section>
-
-        <section class="panel-section">
-          <h2>ツールボックス</h2>
-          <div class="tool-grid" role="group" aria-label="描画ツール">
-            <button class="tool-button tool-button--active" data-tool="pen">ペン</button>
-            <button class="tool-button" data-tool="eraser">消しゴム</button>
-            <button class="tool-button" data-tool="eyedropper">スポイト</button>
-            <button class="tool-button" data-tool="fill">塗りつぶし</button>
+      <div
+        class="floating-dock"
+        id="floatingDock"
+        role="toolbar"
+        aria-label="ツール操作"
+        data-collapsed="false"
+        style="top: 24px; left: 24px"
+      >
+        <div class="floating-dock__bar">
+          <button
+            class="floating-dock__toggle"
+            type="button"
+            id="dockToggle"
+            aria-label="ドックを折りたたむ"
+            aria-expanded="true"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M7 8.5L12 13.5L17 8.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span class="sr-only">ドックの表示を切り替え</span>
+          </button>
+          <span class="app-title">PiXiEEDraw</span>
+          <button
+            class="floating-dock__handle"
+            type="button"
+            id="dockHandle"
+            aria-label="ツールボタンを移動"
+          >
+            <span aria-hidden="true">⋮⋮</span>
+          </button>
+        </div>
+        <div class="floating-dock__content">
+          <div class="floating-dock__group">
+            <button
+              class="dock-icon-button"
+              type="button"
+              data-panel-target="canvasPanel"
+              aria-expanded="false"
+              aria-label="キャンバス設定"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="4" y="4" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
+                <rect x="14" y="4" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
+                <rect x="4" y="14" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
+                <rect x="14" y="14" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
+              </svg>
+              <span class="sr-only">キャンバス設定</span>
+            </button>
+            <button
+              class="dock-icon-button"
+              type="button"
+              data-panel-target="toolsPanel"
+              aria-expanded="false"
+              aria-label="ツール"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M5 19L9.5 14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M13.5 3.5L20.5 10.5L17 14L10 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M9.5 14.5L7.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="sr-only">ツール</span>
+            </button>
+            <button
+              class="dock-icon-button"
+              type="button"
+              data-panel-target="palettePanel"
+              aria-expanded="false"
+              aria-label="カラーパレット"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M12 4C8.134 4 5 7.13401 5 11C5 14.866 8.13401 18 12 18H13.5C14.8807 18 16 19.1193 16 20.5C16 21.3284 16.6716 22 17.5 22C19.9853 22 22 19.9853 22 17.5C22 14.4624 19.5376 12 16.5 12H15.5C14.6716 12 14 11.3284 14 10.5V9.5C14 6.46243 11.5376 4 8.5 4H12Z"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <circle cx="9" cy="9" r="1.2" fill="currentColor" />
+                <circle cx="16" cy="9" r="1.2" fill="currentColor" />
+                <circle cx="8" cy="14" r="1.2" fill="currentColor" />
+                <circle cx="13" cy="13.5" r="1.2" fill="currentColor" />
+              </svg>
+              <span class="sr-only">カラーパレット</span>
+            </button>
           </div>
+          <div class="floating-dock__group floating-dock__group--actions">
+            <button
+              id="exportImage"
+              class="dock-icon-button"
+              type="button"
+              data-panel-target="exportPanel"
+              aria-expanded="false"
+              aria-label="PNG書き出し"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 3V15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M7 10L12 15L17 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M5 19H19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+              <span class="sr-only">PNG書き出し</span>
+            </button>
+            <button id="clearCanvas" class="dock-icon-button dock-icon-button--danger" type="button" aria-label="全消去">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M6 7H18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <path d="M9 7V5.5C9 4.67157 9.67157 4 10.5 4H13.5C14.3284 4 15 4.67157 15 5.5V7" stroke="currentColor" stroke-width="1.6" />
+                <path d="M8.5 11L15.5 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <path d="M15.5 11L8.5 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+              <span class="sr-only">全消去</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <footer class="app-footer">
+        <small>© 2025 PiXiEED Labo</small>
+      </footer>
+    </div>
+
+    <div class="status-hud" role="status" aria-live="polite">
+      <span class="workspace-info" id="cursorInfo">カーソル: -- , --</span>
+      <span class="workspace-info" id="layerInfo">ドット数: 0</span>
+    </div>
+
+    <div class="panel-overlay" id="panelOverlay" hidden></div>
+
+    <div class="floating-panel" id="canvasPanel" role="dialog" aria-modal="true" aria-labelledby="canvasPanelTitle" hidden>
+      <div class="floating-panel__header">
+        <h2 id="canvasPanelTitle">キャンバス設定</h2>
+        <button class="floating-panel__close" type="button" data-panel-close aria-label="閉じる">×</button>
+      </div>
+      <div class="floating-panel__body">
+        <label class="field">
+          <span>ドットサイズ(px)</span>
+          <input id="pixelSize" type="number" value="2" min="1" max="64" step="1" />
+        </label>
+        <label class="field">
+          <span>横幅(ピクセル)</span>
+          <input id="canvasWidth" type="number" value="32" min="8" max="128" />
+        </label>
+        <label class="field">
+          <span>縦幅(ピクセル)</span>
+          <input id="canvasHeight" type="number" value="32" min="8" max="128" />
+        </label>
+        <button id="resizeCanvas" class="button button--secondary button--block" type="button">サイズ反映</button>
+      </div>
+    </div>
+
+    <div class="floating-panel" id="toolsPanel" role="dialog" aria-modal="true" aria-labelledby="toolsPanelTitle" hidden>
+      <div class="floating-panel__header">
+        <h2 id="toolsPanelTitle">ツール</h2>
+        <button class="floating-panel__close" type="button" data-panel-close aria-label="閉じる">×</button>
+      </div>
+      <div class="floating-panel__body">
+        <div class="panel-section panel-section--floating">
+          <h3>ツールボックス</h3>
+          <div class="tool-grid" role="group" aria-label="描画ツール">
+            <button class="tool-button tool-button--active" data-tool="pen" type="button">ペン</button>
+            <button class="tool-button" data-tool="eraser" type="button">消しゴム</button>
+            <button class="tool-button" data-tool="eyedropper" type="button">スポイト</button>
+            <button class="tool-button" data-tool="fill" type="button">塗りつぶし</button>
+          </div>
+        </div>
+        <div class="panel-section panel-section--floating">
+          <h3>ブラシサイズ</h3>
           <label class="field field--inline">
             <span>ブラシ</span>
             <input id="brushSize" type="range" min="1" max="8" value="1" />
             <span id="brushSizeDisplay" class="value-tag">1</span>
           </label>
-        </section>
+        </div>
+      </div>
+    </div>
 
-        <section class="panel-section">
-          <h2>カラーパレット</h2>
+    <div class="floating-panel" id="palettePanel" role="dialog" aria-modal="true" aria-labelledby="palettePanelTitle" hidden>
+      <div class="floating-panel__header">
+        <h2 id="palettePanelTitle">カラーパレット</h2>
+        <button class="floating-panel__close" type="button" data-panel-close aria-label="閉じる">×</button>
+      </div>
+      <div class="floating-panel__body">
+        <div class="panel-section panel-section--floating">
+          <h3>パレット</h3>
           <div class="swatch-grid" id="palette"></div>
-          <label class="field field--inline">
-            <span>カスタム</span>
-            <input id="customColor" type="color" value="#58c4ff" />
+        </div>
+      </div>
+    </div>
+
+    <div class="floating-panel" id="exportPanel" role="dialog" aria-modal="true" aria-labelledby="exportPanelTitle" hidden>
+      <div class="floating-panel__header">
+        <h2 id="exportPanelTitle">PNG 書き出し</h2>
+        <button class="floating-panel__close" type="button" data-panel-close aria-label="閉じる">×</button>
+      </div>
+      <div class="floating-panel__body">
+        <div class="panel-section panel-section--floating">
+          <h3>出力サイズ</h3>
+          <label class="field">
+            <span>解像度</span>
+            <select id="exportSize" class="input-select"></select>
           </label>
-        </section>
-      </aside>
-
-      <section class="workspace">
-        <div class="workspace-toolbar">
-          <span class="workspace-info" id="cursorInfo">カーソル: -- , --</span>
-          <span class="workspace-info" id="layerInfo">ドット数: 0</span>
+          <small class="field-help" id="exportHint">最大解像度は 1024px までです。</small>
         </div>
-        <div class="canvas-wrapper">
-          <canvas id="pixelCanvas" width="32" height="32"></canvas>
-          <canvas id="previewCanvas" width="32" height="32" aria-hidden="true"></canvas>
-        </div>
-      </section>
-    </main>
+        <button id="confirmExport" class="button button--block" type="button">PNG を保存</button>
+      </div>
+    </div>
 
-    <footer class="app-footer">
-      <small>© 2024 PiXiEED Labo</small>
-    </footer>
-
-    <script type="module" src="assets/js/app.js"></script>
+    <script src="assets/js/app.js" defer></script>
   </body>
 </html>
