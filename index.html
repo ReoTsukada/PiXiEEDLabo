@@ -48,18 +48,8 @@
         </div>
         <div class="floating-dock__content">
           <div class="floating-dock__group floating-dock__group--mini-toggles">
-            <button
-              class="dock-icon-button"
-              type="button"
-              data-dock-toggle="toolDock"
-              aria-pressed="true"
-              aria-label="ツールボックス表示"
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M5 19L9.5 14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M13.5 3.5L20.5 10.5L17 14L10 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M9.5 14.5L7.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+            <button class="dock-icon-button" type="button" data-dock-toggle="toolDock" aria-pressed="true" aria-label="ツールボックス表示">
+              <img src="assets/icons/menu-tools.png" alt="ツールボックス" width="28" height="28" />
               <span class="sr-only">ツールボックス表示</span>
             </button>
             <button
@@ -69,19 +59,7 @@
               aria-pressed="true"
               aria-label="カラーパレット表示"
             >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M12 4C8.134 4 5 7.13401 5 11C5 14.866 8.13401 18 12 18H13.5C14.8807 18 16 19.1193 16 20.5C16 21.3284 16.6716 22 17.5 22C19.9853 22 22 19.9853 22 17.5C22 14.4624 19.5376 12 16.5 12H15.5C14.6716 12 14 11.3284 14 10.5V9.5C14 6.46243 11.5376 4 8.5 4H12Z"
-                  stroke="currentColor"
-                  stroke-width="1.6"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <circle cx="9" cy="9" r="1.2" fill="currentColor" />
-                <circle cx="16" cy="9" r="1.2" fill="currentColor" />
-                <circle cx="8" cy="14" r="1.2" fill="currentColor" />
-                <circle cx="13" cy="13.5" r="1.2" fill="currentColor" />
-              </svg>
+              <img src="assets/icons/menu-palette.png" alt="カラーパレット" width="28" height="28" />
               <span class="sr-only">カラーパレット表示</span>
             </button>
             <button
@@ -91,12 +69,7 @@
               aria-pressed="true"
               aria-label="キャンバス設定表示"
             >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect x="4" y="4" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
-                <rect x="14" y="4" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
-                <rect x="4" y="14" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
-                <rect x="14" y="14" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4" />
-              </svg>
+              <img src="assets/icons/menu-canvas.png" alt="キャンバス設定" width="28" height="28" />
               <span class="sr-only">キャンバス設定表示</span>
             </button>
           </div>
@@ -135,7 +108,9 @@
         </div>
         <div class="mini-dock__header">
           <div class="mini-dock__status" aria-hidden="true">
-            <span class="mini-dock__status-icon" id="toolDockStatus"></span>
+            <span class="mini-dock__status-icon">
+              <img id="toolDockStatus" src="assets/icons/tool-pen.png" alt="選択中のツール" width="22" height="22" />
+            </span>
           </div>
           <button class="mini-dock__state" type="button" data-dock-state="toolDock" aria-label="ツールボックスをコンパクト表示">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -146,38 +121,22 @@
         </div>
         <div class="mini-dock__body">
           <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="描画ツール">
-            <button class="mini-button tool-button tool-button--active" type="button" data-tool="pen" aria-label="ペン">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 20L9 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                <path d="M13 4L20 11L16 15L9 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-          </button>
-          <button class="mini-button tool-button" type="button" data-tool="eraser" aria-label="消しゴム">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 15L13 7L19 13L11 21H6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-          <button class="mini-button tool-button" type="button" data-tool="fill" aria-label="塗りつぶし">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 12L12 7L17 12L12 17L7 12Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-              <path d="M18 15C19.1046 15 20 15.8954 20 17C20 18.1046 19.1046 19 18 19C16.8954 19 16 18.1046 16 17C16 15.8954 16.8954 15 18 15Z" fill="currentColor" />
-            </svg>
-          </button>
-          <button class="mini-button tool-button" type="button" data-tool="eyedropper" aria-label="スポイト">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M17 3L21 7L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              <path d="M9 12L12 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              <path d="M5 21L11 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-            </svg>
-          </button>
-          <button class="mini-button tool-button" type="button" data-toggle="virtualCursor" aria-label="仮想カーソル">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 4V20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              <path d="M4 12H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              <circle cx="12" cy="12" r="2.4" fill="currentColor" />
-            </svg>
-          </button>
-        </div>
+            <button class="mini-button tool-button tool-button--active" type="button" data-tool="pen" data-icon="assets/icons/tool-pen.png" aria-label="ペン">
+              <img src="assets/icons/tool-pen.png" alt="ペン" width="32" height="32" />
+            </button>
+            <button class="mini-button tool-button" type="button" data-tool="eraser" data-icon="assets/icons/tool-eraser.png" aria-label="消しゴム">
+              <img src="assets/icons/tool-eraser.png" alt="消しゴム" width="32" height="32" />
+            </button>
+            <button class="mini-button tool-button" type="button" data-tool="fill" data-icon="assets/icons/tool-fill.png" aria-label="塗りつぶし">
+              <img src="assets/icons/tool-fill.png" alt="塗りつぶし" width="32" height="32" />
+            </button>
+            <button class="mini-button tool-button" type="button" data-tool="eyedropper" data-icon="assets/icons/tool-eyedropper.png" aria-label="スポイト">
+              <img src="assets/icons/tool-eyedropper.png" alt="スポイト" width="32" height="32" />
+            </button>
+            <button class="mini-button tool-button" type="button" data-toggle="virtualCursor" data-icon="assets/icons/tool-cursor.png" aria-label="仮想カーソル">
+              <img src="assets/icons/tool-cursor.png" alt="仮想カーソル" width="32" height="32" />
+            </button>
+          </div>
         <div class="mini-dock__form mini-dock__form--brush">
           <label class="mini-field mini-field--inline">
             <span>ブラシ</span>
@@ -194,7 +153,7 @@
         </div>
         <div class="mini-dock__header">
           <div class="mini-dock__status" aria-hidden="true">
-            <span class="mini-dock__status-color" id="paletteDockStatus"></span>
+            <span class="mini-dock__status-color" id="paletteDockStatus" style="background-color: #58c4ff"></span>
           </div>
           <button class="mini-dock__state" type="button" data-dock-state="paletteDock" aria-label="カラーパレットをコンパクト表示">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -214,7 +173,7 @@
         </div>
         <div class="mini-dock__header">
           <div class="mini-dock__status" aria-hidden="true">
-            <span class="mini-dock__status-text" id="canvasDockStatus"></span>
+            <span class="mini-dock__status-text" id="canvasDockStatus">32×32</span>
           </div>
           <button class="mini-dock__state" type="button" data-dock-state="canvasDock" aria-label="キャンバス設定をコンパクト表示">
             <svg viewBox="0 0 24 24" aria-hidden="true">
