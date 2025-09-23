@@ -1181,11 +1181,15 @@ function updateToolDockStatus() {
   }
   const activeButton = toolButtons.find((button) => button.dataset.tool === state.tool);
   if (activeButton) {
-    toolDockStatusIcon.innerHTML = activeButton.innerHTML;
-    toolDockStatusIcon.dataset.tool = state.tool;
+    const iconPath = activeButton.dataset.icon || activeButton.querySelector('img')?.src;
+    if (iconPath) {
+      toolDockStatusIcon.src = iconPath;
+    }
+    const label = activeButton.getAttribute('aria-label') || '選択中のツール';
+    toolDockStatusIcon.alt = label;
   } else {
-    toolDockStatusIcon.innerHTML = '';
-    delete toolDockStatusIcon.dataset.tool;
+    toolDockStatusIcon.src = '';
+    toolDockStatusIcon.alt = '';
   }
 }
 
