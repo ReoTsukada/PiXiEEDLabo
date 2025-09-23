@@ -25,6 +25,9 @@ const exportSizeSelect = document.getElementById('exportSize');
 const exportHint = document.getElementById('exportHint');
 const exportConfirmButton = document.getElementById('confirmExport');
 const virtualCursorToggle = document.querySelector('[data-toggle="virtualCursor"]');
+const IS_TOUCH_DEVICE =
+  typeof navigator !== 'undefined' &&
+  (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && 'ontouchstart' in window));
 const ZOOM_LIMITS = {
   min: 0.1,
   max: 24,
@@ -1301,6 +1304,9 @@ function handlePointerMove(event) {
 }
 
 function handlePointerUp(event) {
+  if (event && event.pointerType === 'touch') {
+    handleZoomPointerUp(event);
+  }
   if (
     virtualCursorState.enabled &&
     event &&
