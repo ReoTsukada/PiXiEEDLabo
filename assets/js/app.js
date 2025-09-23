@@ -1365,6 +1365,11 @@ function flashDock(identifier) {
   scheduleDockAutoHide();
 }
 
+function markDockActive(identifier) {
+  clearDockFade(identifier);
+  flashDock(identifier);
+}
+
 function handleDockPointerEnter(event) {
   const identifier = getDockIdentifierFromElement(event.currentTarget);
   if (!identifier) {
@@ -1829,6 +1834,8 @@ function handlePointerDown(event) {
     renderPreview();
     updateDotCount();
   }
+  markDockActive('toolDock');
+  markDockActive('paletteDock');
 }
 
 function handlePointerMove(event) {
