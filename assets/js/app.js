@@ -36,6 +36,7 @@ const ZOOM_LIMITS = {
 const ZOOM_WHEEL_FACTOR = 0.08;
 const MAX_EXPORT_DIMENSION = 1024;
 const FIXED_PIXEL_SIZE = 20;
+const VIRTUAL_CURSOR_SENSITIVITY = 1;
 
 const ctx = pixelCanvas.getContext('2d', { willReadFrequently: true });
 const previewCtx = previewCanvas.getContext('2d', { willReadFrequently: true });
@@ -87,6 +88,10 @@ const virtualCursorState = {
   dragOffsetY: 0,
   controlLeft: null,
   controlTop: null,
+  lastClientX: null,
+  lastClientY: null,
+  residualDX: 0,
+  residualDY: 0,
 };
 
 let virtualCursorElement = null;
@@ -111,6 +116,7 @@ const zoomPointers = new Map();
 let pinchStartDistance = null;
 let pinchStartZoom = 1;
 let userAdjustedZoom = false;
+let pinchActive = false;
 
 function getWrapperMetrics() {
   if (!canvasStage) {
@@ -274,7 +280,10 @@ function fitZoomToContainer() {
   state.offsetX = 0;
   state.offsetY = 0;
   const fitZoom = Math.min(availableWidth / baseWidth, availableHeight / baseHeight, ZOOM_LIMITS.max);
-  state.minZoom = Math.max(fitZoom / 4, ZOOM_LIMITS.min);
+  const minZoomTarget = IS_TOUCH_DEVICE
+    ? clamp(fitZoom, ZOOM_LIMITS.min, ZOOM_LIMITS.max)
+    : Math.max(fitZoom / 4, ZOOM_LIMITS.min);
+  state.minZoom = minZoomTarget;
   setZoom(fitZoom);
 }
 
@@ -460,9 +469,17 @@ function setVirtualCursorEnabled(enabled) {
     }
     endVirtualDrawing();
     virtualCursorState.pointerId = null;
+    virtualCursorState.lastClientX = null;
+    virtualCursorState.lastClientY = null;
+    virtualCursorState.residualDX = 0;
+    virtualCursorState.residualDY = 0;
     updateCursorInfo();
     return;
   }
+  virtualCursorState.lastClientX = null;
+  virtualCursorState.lastClientY = null;
+  virtualCursorState.residualDX = 0;
+  virtualCursorState.residualDY = 0;
   updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: false });
   ensureVirtualControlPosition();
 }
@@ -639,11 +656,12 @@ function handleWheelZoom(event) {
 }
 
 function handleZoomPointerDown(event) {
-  if (event.pointerType !== 'touch') {
+  if (event.pointerType !== 'touch' || virtualCursorState.enabled) {
     return;
   }
   zoomPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (zoomPointers.size === 2) {
+    pinchActive = true;
     cancelActiveDrawing();
     pinchStartDistance = getZoomPointerDistance();
     pinchStartZoom = state.zoom;
@@ -652,7 +670,7 @@ function handleZoomPointerDown(event) {
 }
 
 function handleZoomPointerMove(event) {
-  if (event.pointerType !== 'touch' || !zoomPointers.has(event.pointerId)) {
+  if (event.pointerType !== 'touch' || virtualCursorState.enabled || !zoomPointers.has(event.pointerId)) {
     return;
   }
   zoomPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -668,14 +686,25 @@ function handleZoomPointerMove(event) {
 }
 
 function handleZoomPointerUp(event) {
+  if (virtualCursorState.enabled) {
+    zoomPointers.clear();
+    pinchStartDistance = null;
+    pinchActive = false;
+    clampOffsets();
+    applyCanvasZoom();
+    return;
+  }
   if (zoomPointers.has(event.pointerId)) {
     zoomPointers.delete(event.pointerId);
   }
   if (zoomPointers.size < 2) {
     pinchStartDistance = null;
+    if (pinchActive) {
+      pinchActive = false;
+      clampOffsets();
+      applyCanvasZoom();
+    }
   }
-  clampOffsets();
-  applyCanvasZoom();
 }
 
 function initZoomControls() {
@@ -1222,7 +1251,11 @@ function handlePointerDown(event) {
       return;
     }
     virtualCursorState.pointerId = event.pointerId;
-    updateVirtualCursorPosition(position.x, position.y);
+    virtualCursorState.lastClientX = event.clientX;
+    virtualCursorState.lastClientY = event.clientY;
+    virtualCursorState.residualDX = 0;
+    virtualCursorState.residualDY = 0;
+    updateCursorInfo(virtualCursorState.x, virtualCursorState.y);
     if (typeof pixelCanvas.setPointerCapture === 'function') {
       try {
         pixelCanvas.setPointerCapture(event.pointerId);
@@ -1274,8 +1307,37 @@ function handlePointerMove(event) {
   if (virtualCursorState.enabled && event.pointerType === 'touch') {
     if (event.pointerId === virtualCursorState.pointerId) {
       const position = getPointerPosition(event);
-      if (position.inBounds) {
-        updateVirtualCursorPosition(position.x, position.y);
+      if (!position.inBounds) {
+        virtualCursorState.lastClientX = event.clientX;
+        virtualCursorState.lastClientY = event.clientY;
+        return;
+      }
+      if (virtualCursorState.lastClientX === null || virtualCursorState.lastClientY === null) {
+        virtualCursorState.lastClientX = event.clientX;
+        virtualCursorState.lastClientY = event.clientY;
+        return;
+      }
+      event.preventDefault();
+      const deltaClientX = event.clientX - virtualCursorState.lastClientX;
+      const deltaClientY = event.clientY - virtualCursorState.lastClientY;
+      virtualCursorState.lastClientX = event.clientX;
+      virtualCursorState.lastClientY = event.clientY;
+      const scaleFactor = state.pixelSize * state.zoom;
+      if (scaleFactor <= 0) {
+        return;
+      }
+      const scaledDeltaX = (deltaClientX / scaleFactor) * VIRTUAL_CURSOR_SENSITIVITY;
+      const scaledDeltaY = (deltaClientY / scaleFactor) * VIRTUAL_CURSOR_SENSITIVITY;
+      const totalDeltaX = virtualCursorState.residualDX + scaledDeltaX;
+      const totalDeltaY = virtualCursorState.residualDY + scaledDeltaY;
+      const stepX = totalDeltaX >= 0 ? Math.floor(totalDeltaX) : Math.ceil(totalDeltaX);
+      const stepY = totalDeltaY >= 0 ? Math.floor(totalDeltaY) : Math.ceil(totalDeltaY);
+      virtualCursorState.residualDX = totalDeltaX - stepX;
+      virtualCursorState.residualDY = totalDeltaY - stepY;
+      if (stepX !== 0 || stepY !== 0) {
+        updateVirtualCursorPosition(virtualCursorState.x + stepX, virtualCursorState.y + stepY);
+      } else {
+        updateCursorInfo(virtualCursorState.x, virtualCursorState.y);
       }
     }
     return;
@@ -1318,6 +1380,10 @@ function handlePointerUp(event) {
       pixelCanvas.releasePointerCapture(event.pointerId);
     }
     virtualCursorState.pointerId = null;
+    virtualCursorState.lastClientX = null;
+    virtualCursorState.lastClientY = null;
+    virtualCursorState.residualDX = 0;
+    virtualCursorState.residualDY = 0;
     return;
   }
   if (
