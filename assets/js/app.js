@@ -20,11 +20,43 @@ const panelCloseButtons = Array.from(document.querySelectorAll('[data-panel-clos
 const floatingDock = document.getElementById('floatingDock');
 const dockHandle = document.getElementById('dockHandle');
 const dockToggle = document.getElementById('dockToggle');
+const toolDock = document.getElementById('toolDock');
+const toolDockHandle = document.getElementById('toolDockDrag');
+const paletteDock = document.getElementById('paletteDock');
+const paletteDockHandle = document.getElementById('paletteDockDrag');
+const canvasDock = document.getElementById('canvasDock');
+const canvasDockHandle = document.getElementById('canvasDockDrag');
+const dockToggleButtons = Array.from(document.querySelectorAll('[data-dock-toggle]'));
+const dockStateButtons = Array.from(document.querySelectorAll('[data-dock-state]'));
 const exportPanel = document.getElementById('exportPanel');
 const exportSizeSelect = document.getElementById('exportSize');
 const exportHint = document.getElementById('exportHint');
 const exportConfirmButton = document.getElementById('confirmExport');
 const virtualCursorToggle = document.querySelector('[data-toggle="virtualCursor"]');
+const toolDockStatusIcon = document.getElementById('toolDockStatus');
+const paletteDockStatusSwatch = document.getElementById('paletteDockStatus');
+const canvasDockStatusText = document.getElementById('canvasDockStatus');
+const dockElements = {
+  toolDock,
+  paletteDock,
+  canvasDock,
+};
+const dockVisibilityState = {
+  toolDock: Boolean(toolDock && toolDock.dataset.visible !== 'false' && !toolDock.hasAttribute('hidden')),
+  paletteDock: Boolean(paletteDock && paletteDock.dataset.visible !== 'false' && !paletteDock.hasAttribute('hidden')),
+  canvasDock: Boolean(canvasDock && canvasDock.dataset.visible !== 'false' && !canvasDock.hasAttribute('hidden')),
+};
+const dockDisplayState = {
+  toolDock: toolDock?.dataset.state || 'expanded',
+  paletteDock: paletteDock?.dataset.state || 'expanded',
+  canvasDock: canvasDock?.dataset.state || 'expanded',
+};
+const DOCK_LAST_ACTIVE_STATE = { ...dockDisplayState };
+const DOCK_LABELS = {
+  toolDock: 'ツールボックス',
+  paletteDock: 'カラーパレット',
+  canvasDock: 'キャンバス設定',
+};
 const IS_TOUCH_DEVICE =
   typeof navigator !== 'undefined' &&
   (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && 'ontouchstart' in window));
@@ -37,6 +69,10 @@ const ZOOM_WHEEL_FACTOR = 0.08;
 const MAX_EXPORT_DIMENSION = 1024;
 const FIXED_PIXEL_SIZE = 20;
 const VIRTUAL_CURSOR_SENSITIVITY = 1;
+const DOCK_SNAP_DISTANCE = 48;
+const AUTO_HIDE_TIMEOUT_MS = 6000;
+let dockAutoHideTimer = null;
+let docksReady = false;
 
 const ctx = pixelCanvas.getContext('2d', { willReadFrequently: true });
 const previewCtx = previewCanvas.getContext('2d', { willReadFrequently: true });
@@ -92,6 +128,8 @@ const virtualCursorState = {
   lastClientY: null,
   residualDX: 0,
   residualDY: 0,
+  prevDrawX: null,
+  prevDrawY: null,
 };
 
 let virtualCursorElement = null;
@@ -332,7 +370,26 @@ function updateVirtualCursorPosition(x, y, options = {}) {
     updateCursorInfo(clampedX, clampedY);
   }
   if (virtualCursorState.drawActive) {
-    continueVirtualDrawing();
+    const prevX = virtualCursorState.prevDrawX;
+    const prevY = virtualCursorState.prevDrawY;
+    if (prevX === null || prevY === null) {
+      virtualCursorState.prevDrawX = clampedX;
+      virtualCursorState.prevDrawY = clampedY;
+      continueVirtualDrawing();
+      return;
+    }
+    if (state.tool === 'pen') {
+      drawLine(prevX, prevY, clampedX, clampedY, true);
+    } else if (state.tool === 'eraser') {
+      drawLine(prevX, prevY, clampedX, clampedY, false);
+    } else {
+      continueVirtualDrawing();
+    }
+    virtualCursorState.prevDrawX = clampedX;
+    virtualCursorState.prevDrawY = clampedY;
+    renderPreview();
+    updateDotCount();
+    return;
   }
 }
 
@@ -409,6 +466,8 @@ function startVirtualDrawing() {
     return;
   }
   const { x, y } = virtualCursorState;
+  virtualCursorState.prevDrawX = x;
+  virtualCursorState.prevDrawY = y;
   if (state.tool === 'pen') {
     isDrawing = true;
     virtualCursorState.drawActive = true;
@@ -427,13 +486,19 @@ function startVirtualDrawing() {
       setActiveColor(sampled);
     }
     virtualCursorState.drawActive = false;
+    virtualCursorState.prevDrawX = null;
+    virtualCursorState.prevDrawY = null;
   } else if (state.tool === 'fill') {
     floodFill(x, y, state.color);
     renderPreview();
     updateDotCount();
     virtualCursorState.drawActive = false;
+    virtualCursorState.prevDrawX = null;
+    virtualCursorState.prevDrawY = null;
   } else {
     virtualCursorState.drawActive = false;
+    virtualCursorState.prevDrawX = null;
+    virtualCursorState.prevDrawY = null;
   }
 }
 
@@ -445,7 +510,9 @@ function setVirtualCursorEnabled(enabled) {
   virtualCursorState.enabled = shouldEnable;
   if (virtualCursorToggle) {
     virtualCursorToggle.classList.toggle('tool-button--active', shouldEnable);
+    virtualCursorToggle.setAttribute('aria-pressed', shouldEnable ? 'true' : 'false');
   }
+  flashDock('toolDock');
   if (!virtualCursorElement || !virtualDrawControl) {
     initVirtualCursorUI();
   }
@@ -473,6 +540,8 @@ function setVirtualCursorEnabled(enabled) {
     virtualCursorState.lastClientY = null;
     virtualCursorState.residualDX = 0;
     virtualCursorState.residualDY = 0;
+    virtualCursorState.prevDrawX = null;
+    virtualCursorState.prevDrawY = null;
     updateCursorInfo();
     return;
   }
@@ -480,6 +549,8 @@ function setVirtualCursorEnabled(enabled) {
   virtualCursorState.lastClientY = null;
   virtualCursorState.residualDX = 0;
   virtualCursorState.residualDY = 0;
+  virtualCursorState.prevDrawX = null;
+  virtualCursorState.prevDrawY = null;
   updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: false });
   ensureVirtualControlPosition();
 }
@@ -745,8 +816,13 @@ function normalizeHex(hex) {
 function setActiveTool(tool) {
   state.tool = tool;
   toolButtons.forEach((button) => {
-    button.classList.toggle('tool-button--active', button.dataset.tool === tool);
+    const isActive = button.dataset.tool === tool;
+    button.classList.toggle('tool-button--active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
+  updateToolDockStatus();
+  flashDock('toolDock');
+  scheduleDockAutoHide();
 }
 
 function setActiveColor(color, swatch = null, options = {}) {
@@ -776,6 +852,9 @@ function setActiveColor(color, swatch = null, options = {}) {
   if (swatch && closePanel) {
     window.setTimeout(() => closePanelIfActive('palettePanel'), 0);
   }
+  updatePaletteDockStatus();
+  flashDock('paletteDock');
+  scheduleDockAutoHide();
 }
 
 function hidePanel(panel) {
@@ -942,6 +1021,408 @@ function setDockPosition(x, y) {
   floatingDock.style.top = `${clampedY}px`;
 }
 
+function makeDockDraggable(dockElement, handleElement) {
+  if (!dockElement || !handleElement) {
+    return;
+  }
+  const dragState = {
+    active: false,
+    pointerId: null,
+    offsetX: 0,
+    offsetY: 0,
+  };
+
+  const clampPosition = (left, top) => {
+    const width = dockElement.offsetWidth;
+    const height = dockElement.offsetHeight;
+    const maxLeft = Math.max(12, window.innerWidth - width - 12);
+    const maxTop = Math.max(12, window.innerHeight - height - 12);
+    const clampedLeft = clamp(left, 12, maxLeft);
+    const clampedTop = clamp(top, 12, maxTop);
+    dockElement.style.left = `${clampedLeft}px`;
+    dockElement.style.top = `${clampedTop}px`;
+    dockElement.style.right = 'auto';
+  };
+
+  const ensureWithinBounds = () => {
+    if (dockElement.dataset.visible === 'false' || dockElement.hasAttribute('hidden')) {
+      return;
+    }
+    const rect = dockElement.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      return;
+    }
+    dockElement.style.left = `${rect.left}px`;
+    dockElement.style.top = `${rect.top}px`;
+    dockElement.style.right = 'auto';
+    clampPosition(rect.left, rect.top);
+  };
+
+  dockElement.__ensureWithinBounds = ensureWithinBounds;
+
+  const handleDockPointerMove = (event) => {
+    if (!dragState.active || event.pointerId !== dragState.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    clampPosition(event.clientX - dragState.offsetX, event.clientY - dragState.offsetY);
+  };
+
+  const endDrag = (event) => {
+    if (!dragState.active || event.pointerId !== dragState.pointerId) {
+      return;
+    }
+    dragState.active = false;
+    dragState.pointerId = null;
+    handleElement.classList.remove('mini-dock__drag--dragging');
+    try {
+      handleElement.releasePointerCapture(event.pointerId);
+    } catch (_) {
+      // noop
+    }
+    snapDockToEdges(dockElement);
+    window.removeEventListener('pointermove', handleDockPointerMove);
+    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointercancel', endDrag);
+    scheduleDockAutoHide();
+  };
+
+  handleElement.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    ensureWithinBounds();
+    const rect = dockElement.getBoundingClientRect();
+    dragState.active = true;
+    dragState.pointerId = event.pointerId;
+    dragState.offsetX = event.clientX - rect.left;
+    dragState.offsetY = event.clientY - rect.top;
+    handleElement.classList.add('mini-dock__drag--dragging');
+    const identifier = getDockIdentifierFromElement(dockElement);
+    if (identifier) {
+      clearDockFade(identifier);
+    }
+    clearDockAutoHideTimer();
+    try {
+      handleElement.setPointerCapture(event.pointerId);
+    } catch (_) {
+      // noop
+    }
+    window.addEventListener('pointermove', handleDockPointerMove, { passive: false });
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+  });
+
+  handleElement.addEventListener('pointerup', endDrag);
+  handleElement.addEventListener('pointercancel', endDrag);
+  window.addEventListener('resize', ensureWithinBounds);
+  ensureWithinBounds();
+}
+
+function snapDockToEdges(dockElement) {
+  if (!dockElement) {
+    return;
+  }
+  const rect = dockElement.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  if (width === 0 && height === 0) {
+    return;
+  }
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  let left = rect.left;
+  let top = rect.top;
+  const rightGap = viewportWidth - rect.right;
+  const bottomGap = viewportHeight - rect.bottom;
+
+  if (Math.abs(rect.left - 12) <= DOCK_SNAP_DISTANCE) {
+    left = 12;
+  } else if (Math.abs(rightGap - 12) <= DOCK_SNAP_DISTANCE) {
+    left = viewportWidth - width - 12;
+  }
+
+  if (Math.abs(rect.top - 12) <= DOCK_SNAP_DISTANCE) {
+    top = 12;
+  } else if (Math.abs(bottomGap - 12) <= DOCK_SNAP_DISTANCE) {
+    top = viewportHeight - height - 12;
+  }
+
+  const centerLeft = (viewportWidth - width) / 2;
+  if (Math.abs(rect.left - centerLeft) <= DOCK_SNAP_DISTANCE) {
+    left = centerLeft;
+  }
+  const centerTop = (viewportHeight - height) / 2;
+  if (Math.abs(rect.top - centerTop) <= DOCK_SNAP_DISTANCE) {
+    top = centerTop;
+  }
+
+  const maxLeft = Math.max(12, viewportWidth - width - 12);
+  const maxTop = Math.max(12, viewportHeight - height - 12);
+  dockElement.style.left = `${clamp(left, 12, maxLeft)}px`;
+  dockElement.style.top = `${clamp(top, 12, maxTop)}px`;
+  dockElement.style.right = 'auto';
+  const identifier = getDockIdentifierFromElement(dockElement);
+  if (identifier) {
+    clearDockFade(identifier);
+  }
+}
+
+function updateDockToggleState(identifier) {
+  const button = dockToggleButtons.find((item) => item.dataset.dockToggle === identifier);
+  if (!button) {
+    return;
+  }
+  const visible = Boolean(dockVisibilityState[identifier]);
+  button.setAttribute('aria-pressed', visible ? 'true' : 'false');
+}
+
+function updateToolDockStatus() {
+  if (!toolDockStatusIcon) {
+    return;
+  }
+  const activeButton = toolButtons.find((button) => button.dataset.tool === state.tool);
+  if (activeButton) {
+    toolDockStatusIcon.innerHTML = activeButton.innerHTML;
+    toolDockStatusIcon.dataset.tool = state.tool;
+  } else {
+    toolDockStatusIcon.innerHTML = '';
+    delete toolDockStatusIcon.dataset.tool;
+  }
+}
+
+function updatePaletteDockStatus() {
+  if (!paletteDockStatusSwatch) {
+    return;
+  }
+  paletteDockStatusSwatch.style.backgroundColor = state.color;
+  paletteDockStatusSwatch.dataset.color = state.color;
+}
+
+function updateCanvasDockStatus() {
+  if (!canvasDockStatusText) {
+    return;
+  }
+  canvasDockStatusText.textContent = `${state.width}×${state.height}`;
+}
+
+function updateDockStateControls(identifier) {
+  const stateButton = dockStateButtons.find((item) => item.dataset.dockState === identifier);
+  const state = dockDisplayState[identifier] || 'expanded';
+  if (stateButton) {
+    const baseLabel = DOCK_LABELS[identifier] || 'ドック';
+    stateButton.setAttribute('aria-label', state === 'compact' ? `${baseLabel}を展開` : `${baseLabel}をコンパクト表示`);
+    stateButton.setAttribute('aria-expanded', state === 'expanded' ? 'true' : 'false');
+  }
+}
+
+function applyDockDisplayState(identifier) {
+  const dockElement = dockElements[identifier];
+  if (!dockElement) {
+    return;
+  }
+  const state = dockDisplayState[identifier] || 'expanded';
+  dockElement.dataset.state = state;
+  updateDockStateControls(identifier);
+  clearDockFade(identifier);
+  if (state === 'compact') {
+    dockElement.dataset.faded = 'false';
+  }
+  if (typeof dockElement.__ensureWithinBounds === 'function') {
+    dockElement.__ensureWithinBounds();
+  }
+}
+
+function setDockDisplayState(identifier, state) {
+  if (!(identifier in dockElements)) {
+    return;
+  }
+  const targetState = state === 'compact' ? 'compact' : 'expanded';
+  const wasState = dockDisplayState[identifier];
+  dockDisplayState[identifier] = targetState;
+  if (targetState !== 'hidden') {
+    DOCK_LAST_ACTIVE_STATE[identifier] = targetState;
+  }
+  if (!dockVisibilityState[identifier]) {
+    return;
+  }
+  if (wasState === targetState) {
+    updateDockStateControls(identifier);
+    return;
+  }
+  applyDockDisplayState(identifier);
+  flashDock(identifier);
+  scheduleDockAutoHide();
+}
+
+function toggleDockDisplayState(identifier) {
+  const current = dockDisplayState[identifier] || 'expanded';
+  setDockDisplayState(identifier, current === 'compact' ? 'expanded' : 'compact');
+}
+
+function setDockVisibility(identifier, visible) {
+  const dockElement = dockElements[identifier];
+  if (!dockElement) {
+    return;
+  }
+  const shouldShow = Boolean(visible);
+  if (dockVisibilityState[identifier] === shouldShow) {
+    updateDockToggleState(identifier);
+    return;
+  }
+  if (!shouldShow) {
+    DOCK_LAST_ACTIVE_STATE[identifier] = dockDisplayState[identifier] || 'expanded';
+  }
+  dockVisibilityState[identifier] = shouldShow;
+  if (shouldShow) {
+    dockElement.dataset.visible = 'true';
+    dockElement.removeAttribute('hidden');
+    dockElement.dataset.faded = 'false';
+    const restoreState = DOCK_LAST_ACTIVE_STATE[identifier] || dockDisplayState[identifier] || 'expanded';
+    dockDisplayState[identifier] = restoreState;
+    applyDockDisplayState(identifier);
+    flashDock(identifier);
+  } else {
+    dockElement.dataset.visible = 'false';
+    dockElement.setAttribute('hidden', '');
+    dockElement.dataset.faded = 'false';
+  }
+  updateDockToggleState(identifier);
+  scheduleDockAutoHide();
+}
+
+function toggleDockVisibility(identifier) {
+  if (!(identifier in dockElements)) {
+    return;
+  }
+  const current = Boolean(dockVisibilityState[identifier]);
+  setDockVisibility(identifier, !current);
+}
+
+function getDockIdentifierFromElement(element) {
+  const entry = Object.entries(dockElements).find(([, value]) => value === element);
+  return entry ? entry[0] : null;
+}
+
+function clearDockFade(identifier) {
+  const dockElement = dockElements[identifier];
+  if (!dockElement) {
+    return;
+  }
+  dockElement.dataset.faded = 'false';
+  dockElement.classList.remove('mini-dock--flash');
+}
+
+function clearDockAutoHideTimer() {
+  if (dockAutoHideTimer !== null) {
+    window.clearTimeout(dockAutoHideTimer);
+    dockAutoHideTimer = null;
+  }
+}
+
+function scheduleDockAutoHide() {
+  clearDockAutoHideTimer();
+  if (AUTO_HIDE_TIMEOUT_MS <= 0) {
+    return;
+  }
+  dockAutoHideTimer = window.setTimeout(() => {
+    Object.entries(dockElements).forEach(([identifier, element]) => {
+      if (!element) {
+        return;
+      }
+      if (!dockVisibilityState[identifier]) {
+        return;
+      }
+      if (dockDisplayState[identifier] === 'compact') {
+        return;
+      }
+      if (element.contains(document.activeElement)) {
+        return;
+      }
+      element.dataset.faded = 'true';
+    });
+  }, AUTO_HIDE_TIMEOUT_MS);
+}
+
+function flashDock(identifier) {
+  const dockElement = dockElements[identifier];
+  if (!dockElement || !dockVisibilityState[identifier]) {
+    return;
+  }
+  clearDockAutoHideTimer();
+  dockElement.dataset.faded = 'false';
+  if (!docksReady) {
+    return;
+  }
+  dockElement.classList.remove('mini-dock--flash');
+  void dockElement.offsetWidth; // force reflow
+  dockElement.classList.add('mini-dock--flash');
+  window.setTimeout(() => {
+    dockElement.classList.remove('mini-dock--flash');
+  }, 500);
+  scheduleDockAutoHide();
+}
+
+function handleDockPointerEnter(event) {
+  const identifier = getDockIdentifierFromElement(event.currentTarget);
+  if (!identifier) {
+    return;
+  }
+  clearDockFade(identifier);
+  clearDockAutoHideTimer();
+}
+
+function handleDockPointerLeave() {
+  scheduleDockAutoHide();
+}
+
+function handleDockPointerDown(event) {
+  const identifier = getDockIdentifierFromElement(event.currentTarget);
+  if (!identifier) {
+    return;
+  }
+  clearDockFade(identifier);
+  clearDockAutoHideTimer();
+}
+
+function handleDockFocusIn(event) {
+  const identifier = getDockIdentifierFromElement(event.currentTarget);
+  if (!identifier) {
+    return;
+  }
+  clearDockFade(identifier);
+  clearDockAutoHideTimer();
+}
+
+function handleDockFocusOut() {
+  scheduleDockAutoHide();
+}
+
+function handleGlobalInteraction() {
+  Object.keys(dockElements).forEach((identifier) => {
+    clearDockFade(identifier);
+  });
+  scheduleDockAutoHide();
+}
+
+function setupDockAutoHide() {
+  Object.entries(dockElements).forEach(([identifier, element]) => {
+    if (!element) {
+      return;
+    }
+    element.addEventListener('pointerenter', handleDockPointerEnter);
+    element.addEventListener('pointerleave', handleDockPointerLeave);
+    element.addEventListener('pointerdown', handleDockPointerDown);
+    element.addEventListener('pointercancel', handleDockPointerDown);
+    element.addEventListener('focusin', handleDockFocusIn);
+    element.addEventListener('focusout', handleDockFocusOut);
+    element.dataset.faded = 'false';
+  });
+  ['pointerdown', 'touchstart', 'keydown', 'wheel'].forEach((type) => {
+    window.addEventListener(type, handleGlobalInteraction, { passive: true });
+  });
+  docksReady = true;
+  scheduleDockAutoHide();
+}
+
 function alignDockForViewport() {
   if (!floatingDock) {
     return;
@@ -1034,6 +1515,8 @@ function updateBrushSize(value) {
   state.brushSize = size;
   brushSizeInput.value = String(size);
   brushSizeDisplay.textContent = String(size);
+  flashDock('toolDock');
+  scheduleDockAutoHide();
 }
 
 function updatePixelSize() {
@@ -1048,6 +1531,9 @@ function updatePixelSize() {
     applyCanvasZoom();
   }
   renderPreview();
+  updateCanvasDockStatus();
+  flashDock('canvasDock');
+  scheduleDockAutoHide();
 }
 
 function updatePreviewSize() {
@@ -1084,6 +1570,7 @@ function initPalette() {
     paletteContainer.appendChild(button);
   });
   setActiveColor(state.color || defaultPalette[0], null, { closePanel: false });
+  updatePaletteDockStatus();
 }
 
 function getPointerPosition(event) {
@@ -1112,6 +1599,37 @@ function drawBrush(x, y) {
   applyBrush(x, y, (px, py) => {
     ctx.fillRect(px, py, 1, 1);
   });
+}
+
+function drawLine(x0, y0, x1, y1, usePen = true) {
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  let sx = x0 < x1 ? 1 : -1;
+  let sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+
+  let currentX = x0;
+  let currentY = y0;
+
+  while (true) {
+    if (usePen) {
+      drawBrush(currentX, currentY);
+    } else {
+      eraseBrush(currentX, currentY);
+    }
+    if (currentX === x1 && currentY === y1) {
+      break;
+    }
+    const e2 = err * 2;
+    if (e2 > -dy) {
+      err -= dy;
+      currentX += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      currentY += sy;
+    }
+  }
 }
 
 function eraseBrush(x, y) {
@@ -1211,6 +1729,9 @@ function resizeCanvas(newWidth, newHeight) {
   if (virtualCursorState.enabled) {
     updateVirtualCursorPosition(virtualCursorState.x, virtualCursorState.y);
   }
+  updateCanvasDockStatus();
+  flashDock('canvasDock');
+  scheduleDockAutoHide();
 }
 
 function clearCanvas() {
@@ -1239,6 +1760,8 @@ function exportImage(multiplier = 1) {
   link.href = exportCanvas.toDataURL('image/png');
   link.click();
 }
+
+let previousPointer = { x: 0, y: 0, inBounds: false };
 
 function handlePointerDown(event) {
   event.preventDefault();
@@ -1272,6 +1795,7 @@ function handlePointerDown(event) {
   if (!inBounds) {
     return;
   }
+  previousPointer = { x, y, inBounds: true };
   if (typeof pixelCanvas.setPointerCapture === 'function') {
     try {
       pixelCanvas.setPointerCapture(event.pointerId);
@@ -1356,11 +1880,24 @@ function handlePointerMove(event) {
     return;
   }
 
-  if (state.tool === 'pen') {
-    drawBrush(x, y);
-  } else if (state.tool === 'eraser') {
-    eraseBrush(x, y);
+  if (!previousPointer.inBounds) {
+    previousPointer = { x, y, inBounds: true };
+    if (state.tool === 'pen') {
+      drawBrush(x, y);
+    } else if (state.tool === 'eraser') {
+      eraseBrush(x, y);
+    }
+    renderPreview();
+    updateDotCount();
+    return;
   }
+
+  if (state.tool === 'pen') {
+    drawLine(previousPointer.x, previousPointer.y, x, y, true);
+  } else if (state.tool === 'eraser') {
+    drawLine(previousPointer.x, previousPointer.y, x, y, false);
+  }
+  previousPointer = { x, y, inBounds: true };
   renderPreview();
   updateDotCount();
 }
@@ -1384,6 +1921,8 @@ function handlePointerUp(event) {
     virtualCursorState.lastClientY = null;
     virtualCursorState.residualDX = 0;
     virtualCursorState.residualDY = 0;
+    virtualCursorState.prevDrawX = null;
+    virtualCursorState.prevDrawY = null;
     return;
   }
   if (
@@ -1396,6 +1935,7 @@ function handlePointerUp(event) {
   }
   activePointerId = null;
   isDrawing = false;
+  previousPointer = { x: 0, y: 0, inBounds: false };
 }
 
 function initEvents() {
@@ -1511,6 +2051,9 @@ function init() {
   initPalette();
   initVirtualCursorUI();
   setActiveTool(state.tool);
+  if (virtualCursorToggle) {
+    virtualCursorToggle.setAttribute('aria-pressed', 'false');
+  }
   updateBrushSize(state.brushSize);
   updatePixelSize();
   updateDotCount();
@@ -1520,11 +2063,38 @@ function init() {
   if (!userMovedDock) {
     alignDockForViewport();
   }
+  makeDockDraggable(toolDock, toolDockHandle);
+  makeDockDraggable(paletteDock, paletteDockHandle);
+  makeDockDraggable(canvasDock, canvasDockHandle);
+  Object.keys(dockElements).forEach((identifier) => {
+    if (!dockElements[identifier]) {
+      return;
+    }
+    applyDockDisplayState(identifier);
+    updateDockToggleState(identifier);
+  });
+  dockToggleButtons.forEach((button) => {
+    const target = button.dataset.dockToggle;
+    button.addEventListener('click', () => {
+      toggleDockVisibility(target);
+    });
+  });
+  dockStateButtons.forEach((button) => {
+    const target = button.dataset.dockState;
+    button.addEventListener('click', () => {
+      toggleDockDisplayState(target);
+    });
+    updateDockStateControls(target);
+  });
   ensureCanvasCentered();
   refreshExportOptions();
   initDockDrag();
   initZoomControls();
   initEvents();
+  updateToolDockStatus();
+  updatePaletteDockStatus();
+  updateCanvasDockStatus();
+  setupDockAutoHide();
 }
 
 init();
