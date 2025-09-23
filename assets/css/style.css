@@ -371,6 +371,7 @@ body {
   max-width: 200px;
 }
 
+
 .mini-button {
   width: 44px;
   height: 44px;
@@ -378,8 +379,9 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.05);
   color: var(--fg);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: background 120ms ease, border 120ms ease, transform 120ms ease;
   cursor: pointer;
 }
@@ -388,6 +390,7 @@ body {
   width: 32px;
   height: 32px;
   pointer-events: none;
+  display: block;
 }
 
 .mini-button svg {
