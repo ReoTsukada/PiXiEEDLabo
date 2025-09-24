@@ -12,7 +12,10 @@
         <div class="canvas-stage" id="canvasStage">
           <canvas id="pixelCanvas" width="32" height="32"></canvas>
         </div>
-        <canvas id="previewCanvas" width="32" height="32" aria-hidden="true"></canvas>
+        <div id="previewWindow" class="preview-window" aria-label="プレビュー">
+          <div id="previewHandle" class="preview-window__handle" role="button" tabindex="0" aria-label="プレビューを移動">PREVIEW</div>
+          <canvas id="previewCanvas" width="32" height="32" aria-hidden="true"></canvas>
+        </div>
       </div>
 
       <div
@@ -65,6 +68,20 @@
             <button
               class="dock-icon-button"
               type="button"
+              data-dock-toggle="layerDock"
+              aria-pressed="true"
+              aria-label="レイヤードック表示"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 4L4 8L12 12L20 8L12 4Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                <path d="M6 12L4 13L12 17L20 13L18 12" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                <path d="M6 16L4 17L12 21L20 17L18 16" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+              </svg>
+              <span class="sr-only">レイヤー表示</span>
+            </button>
+            <button
+              class="dock-icon-button"
+              type="button"
               data-dock-toggle="canvasDock"
               aria-pressed="true"
               aria-label="キャンバス設定表示"
@@ -74,6 +91,45 @@
             </button>
           </div>
           <div class="floating-dock__group floating-dock__group--actions">
+            <button
+              id="togglePreview"
+              class="dock-icon-button"
+              type="button"
+              aria-label="プレビュー表示"
+              aria-pressed="true"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M3 12C5.5 7.5 9 5 12 5s6.5 2.5 9 7c-2.5 4.5-6 7-9 7s-6.5-2.5-9-7Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.6" />
+              </svg>
+              <span class="sr-only">プレビュー表示</span>
+            </button>
+            <button
+              id="undoAction"
+              class="dock-icon-button"
+              type="button"
+              aria-label="元に戻す"
+              disabled
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M9 5L4 10L9 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M4 10H14C16.7614 10 19 12.2386 19 15C19 17.7614 16.7614 20 14 20H9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+              <span class="sr-only">元に戻す</span>
+            </button>
+            <button
+              id="redoAction"
+              class="dock-icon-button"
+              type="button"
+              aria-label="やり直す"
+              disabled
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M15 5L20 10L15 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M20 10H10C7.23858 10 5 12.2386 5 15C5 17.7614 7.23858 20 10 20H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+              <span class="sr-only">やり直す</span>
+            </button>
             <button
               id="exportImage"
               class="dock-icon-button"
@@ -164,6 +220,32 @@
         </div>
         <div class="mini-dock__body">
           <div class="mini-dock__grid mini-dock__grid--palette swatch-grid" id="palette" role="grid" aria-label="カラーパレット"></div>
+        </div>
+      </div>
+
+      <div class="mini-dock mini-dock--layers" id="layerDock" data-visible="true" data-state="expanded" style="top: 320px; right: 24px">
+        <div class="mini-dock__drag" id="layerDockDrag" aria-hidden="true" title="ドラッグで移動">
+          <span class="mini-dock__drag-line"></span>
+        </div>
+        <div class="mini-dock__header">
+          <div class="mini-dock__status" aria-hidden="true">
+            <span class="mini-dock__status-text" id="layerDockStatus">レイヤー1</span>
+          </div>
+          <button class="mini-dock__state" type="button" data-dock-state="layerDock" aria-label="レイヤーパネルをコンパクト表示">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path class="mini-dock__state-line mini-dock__state-line--horizontal" d="M6 12H18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <path class="mini-dock__state-line mini-dock__state-line--vertical" d="M12 6V18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div class="mini-dock__body">
+          <div class="layer-dock" aria-label="レイヤー操作">
+            <div class="layer-dock__controls">
+              <button id="addLayer" class="layer-dock__control" type="button">追加</button>
+              <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button">削除</button>
+            </div>
+            <div class="layer-dock__list" id="layerList" role="listbox" aria-label="レイヤー一覧"></div>
+          </div>
         </div>
       </div>
 
