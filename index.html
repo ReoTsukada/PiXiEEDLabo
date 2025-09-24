@@ -23,7 +23,7 @@
         id="floatingDock"
         role="toolbar"
         aria-label="ツール操作"
-        data-collapsed="false"
+        data-collapsed="true"
         style="top: 24px; left: 24px"
       >
         <div class="floating-dock__bar">
@@ -31,8 +31,8 @@
             class="floating-dock__toggle"
             type="button"
             id="dockToggle"
-            aria-label="ドックを折りたたむ"
-            aria-expanded="true"
+            aria-label="ドックを展開"
+            aria-expanded="false"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M7 8.5L12 13.5L17 8.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
@@ -158,7 +158,7 @@
         </div>
       </div>
 
-      <div class="mini-dock mini-dock--tools" id="toolDock" data-visible="true" data-state="expanded" style="top: 160px; left: 24px">
+      <div class="mini-dock mini-dock--tools" id="toolDock" data-visible="true" data-state="compact" style="top: 24px; left: 24px">
         <div class="mini-dock__drag" id="toolDockDrag" aria-hidden="true" title="ドラッグで移動">
           <span class="mini-dock__drag-line"></span>
         </div>
@@ -203,7 +203,7 @@
         </div>
       </div>
 
-      <div class="mini-dock mini-dock--palette" id="paletteDock" data-visible="true" data-state="expanded" style="top: 160px; right: 24px">
+      <div class="mini-dock mini-dock--palette" id="paletteDock" data-visible="true" data-state="compact" style="top: 24px; right: 24px">
         <div class="mini-dock__drag" id="paletteDockDrag" aria-hidden="true" title="ドラッグで移動">
           <span class="mini-dock__drag-line"></span>
         </div>
@@ -223,7 +223,7 @@
         </div>
       </div>
 
-      <div class="mini-dock mini-dock--layers" id="layerDock" data-visible="true" data-state="expanded" style="top: 320px; right: 24px">
+      <div class="mini-dock mini-dock--layers" id="layerDock" data-visible="true" data-state="compact" style="bottom: 24px; left: 24px">
         <div class="mini-dock__drag" id="layerDockDrag" aria-hidden="true" title="ドラッグで移動">
           <span class="mini-dock__drag-line"></span>
         </div>
@@ -249,7 +249,7 @@
         </div>
       </div>
 
-      <div class="mini-dock mini-dock--canvas" id="canvasDock" data-visible="true" data-state="expanded" style="top: 320px; left: 24px">
+      <div class="mini-dock mini-dock--canvas" id="canvasDock" data-visible="true" data-state="compact" style="bottom: 24px; right: 24px">
         <div class="mini-dock__drag" id="canvasDockDrag" aria-hidden="true" title="ドラッグで移動">
           <span class="mini-dock__drag-line"></span>
         </div>
