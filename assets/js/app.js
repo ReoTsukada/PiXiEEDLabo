@@ -10,8 +10,6 @@ const brushSizeInput = document.getElementById('brushSize');
 const brushSizeDisplay = document.getElementById('brushSizeDisplay');
 const paletteContainer = document.getElementById('palette');
 const palettePanel = document.getElementById('palettePanel');
-const cursorInfo = document.getElementById('cursorInfo');
-const layerInfo = document.getElementById('layerInfo');
 const resizeCanvasButton = document.getElementById('resizeCanvas');
 const clearCanvasButton = document.getElementById('clearCanvas');
 const toolButtons = Array.from(document.querySelectorAll('.tool-button[data-tool]'));
@@ -3704,11 +3702,14 @@ function floodFill(x, y, hexColor) {
 }
 
 function updateCursorInfo(x = null, y = null) {
-  if (x === null || y === null) {
-    cursorInfo.textContent = 'カーソル: -- , --';
+  if (typeof window === 'undefined') {
     return;
   }
-  cursorInfo.textContent = `カーソル: ${x + 1} , ${y + 1}`;
+  if (x === null || y === null) {
+    document.body.dataset.cursorPosition = '';
+    return;
+  }
+  document.body.dataset.cursorPosition = `${x + 1},${y + 1}`;
 }
 
 function updateDotCount() {
@@ -3719,7 +3720,7 @@ function updateDotCount() {
       count += 1;
     }
   }
-  layerInfo.textContent = `ドット数: ${count}`;
+  document.body.dataset.dotCount = String(count);
 }
 
 function renderPreview() {
