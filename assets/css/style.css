@@ -107,15 +107,16 @@ body {
 .floating-dock {
   position: fixed;
   display: grid;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 10px;
+  padding: 10px 12px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(17, 23, 28, 0.86);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(18px);
   z-index: 48;
-  min-width: 248px;
+  min-width: 0;
+  width: fit-content;
   transition: box-shadow 160ms ease, transform 160ms ease;
   top: 24px;
   left: 24px;
@@ -130,9 +131,9 @@ body {
 
 .floating-dock__toggle,
 .floating-dock__handle {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.08);
   color: var(--fg);
@@ -167,13 +168,13 @@ body {
 
 .floating-dock__content {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .floating-dock__group {
   display: flex;
   justify-content: center;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -182,27 +183,79 @@ body {
 }
 
 .mini-dock {
-  position: fixed;
   display: grid;
-  gap: 8px;
-  padding: 12px;
+  gap: 6px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(17, 23, 28, 0.9);
+  color: var(--fg);
+  min-width: 0;
+}
+
+.mini-dock[data-visible='true'] {
+  position: fixed;
+  padding: 8px 10px;
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(16px);
   z-index: 40;
-  width: 160px;
+  width: fit-content;
 }
 
 .mini-dock[data-visible='false'] {
-  display: none;
+  position: static;
+  padding: 4px;
+  box-shadow: none;
+  backdrop-filter: none;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  width: 72px;
+  min-width: 72px;
+  flex: 0 0 72px;
+  cursor: grab;
+  gap: 4px;
+  user-select: none;
+}
+
+.mini-dock[data-visible='false']:active {
+  cursor: grabbing;
+}
+
+.mini-dock[data-visible='false']:hover {
+  background: rgba(88, 196, 255, 0.18);
+  border-color: rgba(88, 196, 255, 0.32);
+}
+
+.mini-dock[data-visible='false'][data-menu-expanded='true'] {
+  width: 100%;
+  min-width: 0;
+  flex: 0 0 100%;
+  padding: 10px 12px;
+  cursor: default;
+  background: rgba(17, 36, 46, 0.92);
+  border-color: rgba(88, 196, 255, 0.45);
+  max-height: 260px;
+  overflow: hidden;
+  order: 1;
+}
+
+.mini-dock--dragging {
+  z-index: 240;
+  pointer-events: none;
+  box-shadow: 0 20px 36px rgba(0, 0, 0, 0.4);
+}
+
+.mini-dock--placeholder {
+  border: 1px dashed rgba(88, 196, 255, 0.6);
+  background: rgba(88, 196, 255, 0.15);
+  height: 54px;
+  min-width: 72px;
+  pointer-events: none;
 }
 
 .mini-dock__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -213,6 +266,18 @@ body {
   align-items: center;
   padding: 6px 0;
   cursor: grab;
+}
+
+.floating-dock__group--mini .mini-dock[data-visible='false']:not([data-menu-expanded='true']) {
+  order: 0;
+}
+
+.mini-dock[data-visible='false'] .mini-dock__drag {
+  display: none;
+}
+
+.mini-dock[data-visible='false'][data-menu-expanded='true'] .mini-dock__drag {
+  display: none;
 }
 
 .mini-dock__drag:active {
@@ -242,9 +307,53 @@ body {
 }
 
 .mini-dock__status {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+}
+
+.mini-dock[data-visible='false'] .mini-dock__status {
+  justify-content: center;
+}
+
+.mini-dock__status-button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  border-radius: 12px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, border 120ms ease, transform 120ms ease;
+  appearance: none;
+  font: inherit;
+  line-height: 1.1;
+}
+
+.mini-dock__status-button:hover {
+  background: rgba(88, 196, 255, 0.2);
+  border-color: rgba(88, 196, 255, 0.4);
+}
+
+.mini-dock__status-button:focus-visible {
+  outline: 2px solid rgba(88, 196, 255, 0.6);
+  outline-offset: 2px;
+}
+
+.mini-dock__status-button:active {
+  transform: translateY(1px);
+}
+
+.mini-dock__status-button[aria-expanded='true'] {
+  background: rgba(88, 196, 255, 0.22);
+  border-color: rgba(88, 196, 255, 0.5);
+}
+
+.mini-dock__status-button:disabled {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .mini-dock__status-icon {
@@ -273,55 +382,62 @@ body {
   font-size: 12px;
   color: var(--fg-muted);
   font-weight: 600;
-  min-width: 48px;
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mini-dock[data-state='compact'] {
-  padding: 10px;
-  width: 160px;
   justify-items: center;
+}
+
+.mini-dock[data-visible='true'][data-state='compact'] {
+  padding: 6px;
+  width: fit-content;
+}
+
+.mini-dock[data-visible='false'] .mini-dock__status-button {
+  padding: 10px;
+  width: 100%;
+  justify-content: center;
+  background: transparent;
+  border-color: transparent;
+}
+
+.mini-dock[data-visible='false'] .mini-dock__status-button:hover {
+  background: rgba(88, 196, 255, 0.2);
+  border-color: rgba(88, 196, 255, 0.32);
+}
+
+.mini-dock[data-visible='false'][data-menu-expanded='true'] .mini-dock__status-button {
+  background: rgba(88, 196, 255, 0.2);
+  border-color: rgba(88, 196, 255, 0.45);
+  cursor: pointer;
+}
+
+.mini-dock[data-visible='false'][data-menu-expanded='true'] .mini-dock__status-button:hover {
+  background: rgba(88, 196, 255, 0.28);
+  border-color: rgba(88, 196, 255, 0.55);
+}
+
+.mini-dock[data-visible='false'] .mini-dock__body {
+  display: none;
+}
+
+.mini-dock[data-visible='false'][data-menu-expanded='true'] .mini-dock__body {
+  display: grid;
+  max-height: 190px;
+  overflow: auto;
 }
 
 .mini-dock[data-state='compact'] .mini-dock__body {
   display: none;
 }
 
-.mini-dock__state-line--vertical {
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
 
-
-.mini-dock[data-state='compact'] .mini-dock__state-line--vertical {
-  opacity: 1;
-}
-
-
-.mini-dock__state {
-  width: 26px;
-  height: 26px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--fg);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background 120ms ease, border 120ms ease, transform 120ms ease;
-}
-
-.mini-dock__state svg {
-  width: 16px;
-  height: 16px;
-}
-
-.mini-dock__state:hover {
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.24);
-}
-
-.mini-dock__state:active {
-  transform: translateY(1px);
+.mini-dock[data-state='compact'] .mini-dock__status-button {
+  padding: 6px;
 }
 
 .mini-dock__grid {
@@ -330,10 +446,10 @@ body {
 }
 
 .mini-dock__grid--tools {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
   width: 100%;
   justify-items: center;
-  gap: 4px;
+  gap: 8px;
 }
 
 .mini-dock__grid--palette {
@@ -344,9 +460,9 @@ body {
 
 
 .mini-button {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.05);
   color: var(--fg);
@@ -358,15 +474,15 @@ body {
 }
 
 .mini-button img {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   pointer-events: none;
   display: block;
 }
 
 .mini-button svg {
-  width: 22px;
-  height: 22px;
+  width: 30px;
+  height: 30px;
 }
 
 .mini-button:hover {
@@ -392,6 +508,20 @@ body {
   border: 2px solid transparent;
   cursor: pointer;
   transition: transform 120ms ease, border 120ms ease;
+}
+
+.mini-dock[data-menu-expanded='true'].mini-dock--palette .mini-dock__grid--palette {
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  justify-items: center;
+}
+
+.mini-dock[data-menu-expanded='true'].mini-dock--palette .swatch {
+  width: 44px;
+  height: 44px;
+}
+
+.mini-dock[data-menu-expanded='true'].mini-dock--palette .swatch--add {
+  font-size: 16px;
 }
 
 .mini-dock--palette .swatch--add {
@@ -501,9 +631,9 @@ body {
 }
 
 .dock-icon-button {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.06);
   color: var(--fg);
@@ -514,9 +644,27 @@ body {
   transition: background 120ms ease, border 120ms ease, transform 120ms ease;
 }
 
-.floating-dock__group--mini-toggles {
-  justify-content: center;
-  gap: 10px;
+.floating-dock__group--mini {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.floating-dock__group--mini.dock-menu--receiving {
+  outline: 1px dashed rgba(88, 196, 255, 0.6);
+  outline-offset: 4px;
+}
+
+.floating-dock__group--mini.dock-menu--expanded {
+  padding-bottom: 12px;
+}
+
+.floating-dock--receiving {
+  outline: 1px dashed rgba(88, 196, 255, 0.6);
+  outline-offset: 4px;
 }
 
 .dock-icon-button[aria-pressed='true'] {
@@ -525,12 +673,14 @@ body {
 }
 
 .dock-icon-button svg {
+  width: 32px;
+  height: 32px;
   pointer-events: none;
 }
 
 .dock-icon-button img {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   pointer-events: none;
 }
 
@@ -1113,10 +1263,6 @@ body {
     left: auto;
   }
 }
-.mini-dock[data-state='compact'] .mini-dock__state-line--vertical {
-  opacity: 1;
-}
-
  .mini-dock--layers {
   min-width: 0;
 }
