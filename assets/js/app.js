@@ -1,5 +1,7 @@
 const pixelCanvas = document.getElementById('pixelCanvas');
 const previewCanvas = document.getElementById('previewCanvas');
+const previewWindow = document.getElementById('previewWindow');
+const previewHandle = document.getElementById('previewHandle');
 const canvasStage = document.getElementById('canvasStage');
 const pixelSizeInput = document.getElementById('pixelSize');
 const widthInput = document.getElementById('canvasWidth');
@@ -28,6 +30,15 @@ const canvasDock = document.getElementById('canvasDock');
 const canvasDockHandle = document.getElementById('canvasDockDrag');
 const dockToggleButtons = Array.from(document.querySelectorAll('[data-dock-toggle]'));
 const dockStateButtons = Array.from(document.querySelectorAll('[data-dock-state]'));
+const layerDock = document.getElementById('layerDock');
+const layerDockHandle = document.getElementById('layerDockDrag');
+const layerDockStatusText = document.getElementById('layerDockStatus');
+const layerListElement = document.getElementById('layerList');
+const addLayerButton = document.getElementById('addLayer');
+const deleteLayerButton = document.getElementById('deleteLayer');
+const togglePreviewButton = document.getElementById('togglePreview');
+const undoButton = document.getElementById('undoAction');
+const redoButton = document.getElementById('redoAction');
 const exportPanel = document.getElementById('exportPanel');
 const exportSizeSelect = document.getElementById('exportSize');
 const exportHint = document.getElementById('exportHint');
@@ -36,27 +47,40 @@ const virtualCursorToggle = document.querySelector('[data-toggle="virtualCursor"
 const toolDockStatusIcon = document.getElementById('toolDockStatus');
 const paletteDockStatusSwatch = document.getElementById('paletteDockStatus');
 const canvasDockStatusText = document.getElementById('canvasDockStatus');
+let addPaletteButton = null;
 const dockElements = {
   toolDock,
   paletteDock,
   canvasDock,
+  layerDock,
 };
 const dockVisibilityState = {
   toolDock: Boolean(toolDock && toolDock.dataset.visible !== 'false' && !toolDock.hasAttribute('hidden')),
   paletteDock: Boolean(paletteDock && paletteDock.dataset.visible !== 'false' && !paletteDock.hasAttribute('hidden')),
   canvasDock: Boolean(canvasDock && canvasDock.dataset.visible !== 'false' && !canvasDock.hasAttribute('hidden')),
+  layerDock: Boolean(layerDock && layerDock.dataset.visible !== 'false' && !layerDock.hasAttribute('hidden')),
 };
 const dockDisplayState = {
   toolDock: toolDock?.dataset.state || 'expanded',
   paletteDock: paletteDock?.dataset.state || 'expanded',
   canvasDock: canvasDock?.dataset.state || 'expanded',
+  layerDock: layerDock?.dataset.state || 'expanded',
 };
 const DOCK_LAST_ACTIVE_STATE = { ...dockDisplayState };
 const DOCK_LABELS = {
   toolDock: 'ツールボックス',
   paletteDock: 'カラーパレット',
   canvasDock: 'キャンバス設定',
+  layerDock: 'レイヤー',
 };
+const ICON_LAYER_VISIBLE =
+  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12C4.5 7 8 4 12 4s7.5 3 10 8c-2.5 5-6 8-10 8s-7.5-3-10-8Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="1.6" /></svg>';
+const ICON_LAYER_HIDDEN =
+  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4L20 20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /><path d="M18.5 15.5C20.17 14.1 21.5 12.24 22 12c-2.5-5-6-8-10-8-1.27 0-2.49.23-3.66.66" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><path d="M5.5 8.5C3.83 9.9 2.5 11.76 2 12c1.25 2.5 2.93 4.59 4.93 6.08" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><path d="M9 9.16A3 3 0 0 1 14.84 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>';
+const ICON_LAYER_HANDLE =
+  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5V19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M15 5V19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const STORAGE_KEY = 'pixiedraw-layer-state-v1';
+const SAVE_DEBOUNCE_MS = 600;
 const IS_TOUCH_DEVICE =
   typeof navigator !== 'undefined' &&
   (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && 'ontouchstart' in window));
@@ -107,6 +131,12 @@ const state = {
   offsetY: 0,
 };
 
+const layersState = {
+  layers: [],
+  selectedId: null,
+  nextId: 1,
+};
+
 const HAS_TOUCH_SUPPORT =
   typeof navigator !== 'undefined' &&
   (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches));
@@ -155,6 +185,824 @@ let pinchStartDistance = null;
 let pinchStartZoom = 1;
 let userAdjustedZoom = false;
 let pinchActive = false;
+const layerDragState = {
+  draggingId: null,
+  dropBeforeId: null,
+};
+let saveTimer = null;
+let pendingSave = false;
+let isRestoringState = false;
+const MAX_HISTORY_ENTRIES = 50;
+const historyStack = [];
+const redoStack = [];
+let historyDirty = false;
+const autoCompactStates = {};
+const previewDragState = {
+  active: false,
+  pointerId: null,
+  offsetX: 0,
+  offsetY: 0,
+};
+let previewVisible = true;
+
+function detectLayerHasContent(layer) {
+  const width = layer.canvas.width;
+  const height = layer.canvas.height;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return false;
+  }
+  const imageData = layer.ctx.getImageData(0, 0, width, height).data;
+  for (let index = 3; index < imageData.length; index += 4) {
+    if (imageData[index] !== 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function refreshLayerContentFlag(layer) {
+  const hasContent = detectLayerHasContent(layer);
+  if (layer.hasContent !== hasContent) {
+    layer.hasContent = hasContent;
+    return true;
+  }
+  return false;
+}
+
+function canUseLocalStorage() {
+  try {
+    return typeof window !== 'undefined' && 'localStorage' in window && window.localStorage !== null;
+  } catch (_) {
+    return false;
+  }
+}
+
+function serializeAppState() {
+  const layers = layersState.layers.map((layer) => ({
+    id: layer.id,
+    name: layer.name,
+    visible: layer.visible,
+    opacity: layer.opacity,
+    image: layer.canvas.toDataURL('image/png'),
+  }));
+  return {
+    version: 1,
+    canvas: {
+      width: state.width,
+      height: state.height,
+    },
+    selectedId: layersState.selectedId,
+    nextId: layersState.nextId,
+    layers,
+  };
+}
+
+function saveProjectState() {
+  if (!canUseLocalStorage()) {
+    pendingSave = false;
+    return;
+  }
+  try {
+    const payload = serializeAppState();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Saving issues (e.g., quota exceeded) should not break the app.
+    console.warn('ピクセルデータの保存に失敗しました', error);
+  }
+  pendingSave = false;
+}
+
+function queueStateSave() {
+  if (isRestoringState || !canUseLocalStorage()) {
+    return;
+  }
+  pendingSave = true;
+  if (saveTimer !== null) {
+    window.clearTimeout(saveTimer);
+  }
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null;
+    if (pendingSave) {
+      saveProjectState();
+    }
+  }, SAVE_DEBOUNCE_MS);
+}
+
+function loadImageFromDataURL(dataURL) {
+  return new Promise((resolve, reject) => {
+    if (!dataURL) {
+      resolve(null);
+      return;
+    }
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Failed to decode layer image'));
+    image.src = dataURL;
+  });
+}
+
+async function restoreProjectState() {
+  if (!canUseLocalStorage()) {
+    return false;
+  }
+  let payload;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return false;
+    }
+    payload = JSON.parse(raw);
+  } catch (error) {
+    console.warn('レイヤー構成の読み込みに失敗しました', error);
+    return false;
+  }
+  if (!payload || !Array.isArray(payload.layers) || payload.layers.length === 0) {
+    return false;
+  }
+
+  const width = clamp(Number(payload.canvas?.width) || state.width, Number(widthInput.min), Number(widthInput.max));
+  const height = clamp(Number(payload.canvas?.height) || state.height, Number(heightInput.min), Number(heightInput.max));
+
+  isRestoringState = true;
+  try {
+    layersState.layers.length = 0;
+    layersState.selectedId = null;
+    layersState.nextId = 1;
+
+    pixelCanvas.width = width;
+    pixelCanvas.height = height;
+    ctx.imageSmoothingEnabled = false;
+    state.width = width;
+    state.height = height;
+    widthInput.value = String(width);
+    heightInput.value = String(height);
+    updatePixelSize({ skipComposite: true });
+
+    for (let index = 0; index < payload.layers.length; index += 1) {
+      const layerData = payload.layers[index];
+      const layer = createLayer({
+        name: typeof layerData?.name === 'string' && layerData.name.trim().length > 0 ? layerData.name : `レイヤー${layersState.nextId}`,
+        visible: layerData?.visible !== false,
+        opacity: clamp(Number(layerData?.opacity ?? 1), 0, 1),
+        insertAt: layersState.layers.length,
+      });
+      if (typeof layerData?.id === 'string' && layerData.id.length > 0) {
+        layer.id = layerData.id;
+      }
+      try {
+        const image = await loadImageFromDataURL(layerData?.image);
+        if (image) {
+          layer.ctx.clearRect(0, 0, width, height);
+          layer.ctx.drawImage(image, 0, 0, width, height);
+        }
+      } catch (error) {
+        console.warn('レイヤー画像の復元に失敗しました', error);
+        layer.ctx.clearRect(0, 0, width, height);
+      }
+      layer.hasContent = detectLayerHasContent(layer);
+      if (typeof layerData?.id === 'string') {
+        const numericId = Number.parseInt(layerData.id.replace('layer-', ''), 10);
+        if (Number.isFinite(numericId)) {
+          layersState.nextId = Math.max(layersState.nextId, numericId + 1);
+        }
+      }
+    }
+
+    const desiredSelectedId = typeof payload.selectedId === 'string' ? payload.selectedId : null;
+    const fallbackLayer = layersState.layers.find((layer) => layer.id === desiredSelectedId) || layersState.layers[layersState.layers.length - 1] || layersState.layers[0] || null;
+    if (fallbackLayer) {
+      layersState.selectedId = fallbackLayer.id;
+    }
+
+    renderLayerList();
+    updateLayerDockStatus();
+    updateLayerControlAvailability();
+    compositeLayers({ skipContentCheck: true });
+    refreshExportOptions();
+    updateDotCount();
+    pendingSave = false;
+    return true;
+  } finally {
+    isRestoringState = false;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (pendingSave) {
+      saveProjectState();
+    }
+  });
+}
+
+function captureHistorySnapshot() {
+  return {
+    width: state.width,
+    height: state.height,
+    selectedId: layersState.selectedId,
+    nextId: layersState.nextId,
+    layers: layersState.layers.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      visible: layer.visible,
+      opacity: layer.opacity,
+      imageData: layer.ctx.getImageData(0, 0, state.width, state.height),
+    })),
+  };
+}
+
+function updateUndoRedoUI() {
+  if (undoButton) {
+    undoButton.disabled = historyStack.length <= 1;
+  }
+  if (redoButton) {
+    redoButton.disabled = redoStack.length === 0;
+  }
+}
+
+function pushHistorySnapshot() {
+  if (isRestoringState) {
+    return;
+  }
+  const snapshot = captureHistorySnapshot();
+  historyStack.push(snapshot);
+  if (historyStack.length > MAX_HISTORY_ENTRIES) {
+    historyStack.shift();
+  }
+  redoStack.length = 0;
+  updateUndoRedoUI();
+}
+
+function resetHistory() {
+  historyStack.length = 0;
+  redoStack.length = 0;
+  historyDirty = false;
+  pushHistorySnapshot();
+}
+
+function markHistoryDirty() {
+  if (!isRestoringState) {
+    historyDirty = true;
+  }
+}
+
+function finalizeHistoryEntry({ force = false } = {}) {
+  if (isRestoringState) {
+    historyDirty = false;
+    return;
+  }
+  if (!historyDirty && !force) {
+    return;
+  }
+  historyDirty = false;
+  pushHistorySnapshot();
+  queueStateSave();
+}
+
+function applyHistorySnapshot(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.layers)) {
+    return false;
+  }
+  const width = clamp(Number(snapshot.width) || state.width, Number(widthInput.min), Number(widthInput.max));
+  const height = clamp(Number(snapshot.height) || state.height, Number(heightInput.min), Number(heightInput.max));
+
+  isRestoringState = true;
+  try {
+    layersState.layers.length = 0;
+    layersState.selectedId = null;
+    layersState.nextId = 1;
+
+    pixelCanvas.width = width;
+    pixelCanvas.height = height;
+    ctx.imageSmoothingEnabled = false;
+    state.width = width;
+    state.height = height;
+    widthInput.value = String(width);
+    heightInput.value = String(height);
+    updatePixelSize({ skipComposite: true });
+
+    snapshot.layers.forEach((layerData) => {
+      const layer = createLayer({
+        name: typeof layerData?.name === 'string' ? layerData.name : `レイヤー${layersState.nextId}`,
+        visible: layerData?.visible !== false,
+        opacity: clamp(Number(layerData?.opacity ?? 1), 0, 1),
+        insertAt: layersState.layers.length,
+        imageSource: layerData?.imageData || null,
+      });
+      if (typeof layerData?.id === 'string' && layerData.id.length > 0) {
+        layer.id = layerData.id;
+      }
+      layer.hasContent = detectLayerHasContent(layer);
+    });
+
+    const calculatedNextId = Number(snapshot.nextId);
+    if (Number.isFinite(calculatedNextId) && calculatedNextId > 0) {
+      layersState.nextId = Math.max(calculatedNextId, layersState.layers.length + 1);
+    } else {
+      layersState.nextId = layersState.layers.length + 1;
+    }
+
+    const desiredSelectedId = typeof snapshot.selectedId === 'string' ? snapshot.selectedId : null;
+    const fallbackLayer = layersState.layers.find((layer) => layer.id === desiredSelectedId) || layersState.layers[layersState.layers.length - 1] || layersState.layers[0] || null;
+    if (fallbackLayer) {
+      layersState.selectedId = fallbackLayer.id;
+    }
+
+    renderLayerList();
+    updateLayerDockStatus();
+    updateLayerControlAvailability();
+    compositeLayers({ skipContentCheck: true });
+    refreshExportOptions();
+    updateDotCount();
+  } finally {
+    isRestoringState = false;
+  }
+  historyDirty = false;
+  queueStateSave();
+  updateUndoRedoUI();
+  return true;
+}
+
+function performUndo() {
+  if (historyStack.length <= 1) {
+    return;
+  }
+  const current = historyStack.pop();
+  redoStack.push(current);
+  const snapshot = historyStack[historyStack.length - 1];
+  applyHistorySnapshot(snapshot);
+}
+
+function performRedo() {
+  if (redoStack.length === 0) {
+    return;
+  }
+  const snapshot = redoStack.pop();
+  historyStack.push(snapshot);
+  if (historyStack.length > MAX_HISTORY_ENTRIES) {
+    historyStack.shift();
+  }
+  applyHistorySnapshot(snapshot);
+}
+
+function createOffscreenCanvas(width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Failed to create layer context');
+  }
+  context.imageSmoothingEnabled = false;
+  return { canvas, ctx: context };
+}
+
+function createLayer({ name, insertAt = 0, imageSource = null, visible = true, opacity = 1 } = {}) {
+  const { canvas, ctx: layerCtx } = createOffscreenCanvas(state.width, state.height);
+  if (imageSource instanceof HTMLCanvasElement || imageSource instanceof ImageBitmap) {
+    layerCtx.drawImage(imageSource, 0, 0);
+  } else if (imageSource instanceof ImageData) {
+    layerCtx.putImageData(imageSource, 0, 0);
+  }
+  const layer = {
+    id: `layer-${layersState.nextId}`,
+    name: name || `レイヤー${layersState.nextId}`,
+    visible,
+    opacity: clamp(Number(opacity) || 1, 0, 1),
+    canvas,
+    ctx: layerCtx,
+    hasContent: false,
+  };
+  layersState.nextId += 1;
+  layer.hasContent = detectLayerHasContent(layer);
+  const clampedIndex = clamp(Math.round(insertAt), 0, layersState.layers.length);
+  layersState.layers.splice(clampedIndex, 0, layer);
+  if (!layersState.selectedId) {
+    layersState.selectedId = layer.id;
+  }
+  return layer;
+}
+
+function getLayerIndex(layerId) {
+  return layersState.layers.findIndex((layer) => layer.id === layerId);
+}
+
+function getActiveLayer() {
+  const index = getLayerIndex(layersState.selectedId);
+  if (index === -1) {
+    return null;
+  }
+  return layersState.layers[index];
+}
+
+function selectLayer(layerId) {
+  if (!layerId) {
+    return;
+  }
+  const index = getLayerIndex(layerId);
+  if (index === -1) {
+    return;
+  }
+  const changed = layersState.selectedId !== layerId;
+  layersState.selectedId = layerId;
+  updateLayerSelectionUI();
+  updateLayerDockStatus();
+  updateLayerControlAvailability();
+  if (changed) {
+    queueStateSave();
+  }
+}
+
+function compositeLayers({ skipUIUpdate = false, skipContentCheck = false } = {}) {
+  ctx.clearRect(0, 0, state.width, state.height);
+  let contentChanged = false;
+  for (let index = layersState.layers.length - 1; index >= 0; index -= 1) {
+    const layer = layersState.layers[index];
+    if (!skipContentCheck) {
+      contentChanged = refreshLayerContentFlag(layer) || contentChanged;
+    }
+    if (!layer.visible) {
+      continue;
+    }
+    if (layer.opacity <= 0) {
+      continue;
+    }
+    ctx.globalAlpha = clamp(layer.opacity, 0, 1);
+    ctx.drawImage(layer.canvas, 0, 0);
+  }
+  ctx.globalAlpha = 1;
+  if (!skipUIUpdate) {
+    renderPreview();
+    updateDotCount();
+    if (contentChanged) {
+      renderLayerList();
+      queueStateSave();
+    }
+  }
+}
+
+function updateLayerSelectionUI() {
+  if (!layerListElement) {
+    return;
+  }
+  Array.from(layerListElement.querySelectorAll('[data-layer-id]')).forEach((item) => {
+    const isActive = item.dataset.layerId === layersState.selectedId;
+    item.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    item.dataset.active = isActive ? 'true' : 'false';
+  });
+  const activeLayer = getActiveLayer();
+  if (activeLayer) {
+    layerListElement.setAttribute('aria-activedescendant', `layer-option-${activeLayer.id}`);
+  } else {
+    layerListElement.removeAttribute('aria-activedescendant');
+  }
+}
+
+function updateLayerDockStatus() {
+  if (!layerDockStatusText) {
+    return;
+  }
+  const activeLayer = getActiveLayer();
+  layerDockStatusText.textContent = activeLayer ? activeLayer.name : 'レイヤーなし';
+}
+
+function updateLayerControlAvailability() {
+  if (deleteLayerButton) {
+    deleteLayerButton.disabled = layersState.layers.length <= 1;
+  }
+}
+
+function toggleLayerVisibility(layerId) {
+  const layer = layersState.layers.find((item) => item.id === layerId);
+  if (!layer) {
+    return;
+  }
+  markHistoryDirty();
+  layer.visible = !layer.visible;
+  renderLayerList();
+  compositeLayers();
+  finalizeHistoryEntry();
+}
+
+function renameLayer(layerId, nextName) {
+  const layer = layersState.layers.find((item) => item.id === layerId);
+  if (!layer) {
+    return;
+  }
+  const trimmed = nextName.trim().slice(0, 40);
+  if (trimmed.length === 0) {
+    return;
+  }
+  if (trimmed === layer.name) {
+    return;
+  }
+  markHistoryDirty();
+  layer.name = trimmed;
+  renderLayerList();
+  updateLayerDockStatus();
+  finalizeHistoryEntry();
+}
+
+function addLayer() {
+  const activeIndex = getLayerIndex(layersState.selectedId);
+  const insertAt = activeIndex === -1 ? 0 : activeIndex;
+  markHistoryDirty();
+  const layer = createLayer({ insertAt, name: `レイヤー${layersState.nextId}`, visible: true, opacity: 1 });
+  layersState.selectedId = layer.id;
+  renderLayerList();
+  updateLayerDockStatus();
+  compositeLayers();
+  finalizeHistoryEntry();
+}
+
+function deleteLayer(layerId) {
+  if (layersState.layers.length <= 1) {
+    return;
+  }
+  const index = getLayerIndex(layerId);
+  if (index === -1) {
+    return;
+  }
+  markHistoryDirty();
+  const [removed] = layersState.layers.splice(index, 1);
+  if (removed && removed.id === layersState.selectedId) {
+    const fallback = layersState.layers[index] || layersState.layers[index - 1] || layersState.layers[0] || null;
+    layersState.selectedId = fallback ? fallback.id : null;
+  }
+  renderLayerList();
+  updateLayerDockStatus();
+  updateLayerControlAvailability();
+  compositeLayers();
+  finalizeHistoryEntry();
+}
+
+function reorderLayer(layerId, newIndex) {
+  const sourceIndex = getLayerIndex(layerId);
+  if (sourceIndex === -1) {
+    return;
+  }
+  let targetIndex = clamp(Math.round(newIndex), 0, layersState.layers.length);
+  if (targetIndex === sourceIndex || targetIndex === sourceIndex + 1) {
+    return;
+  }
+  markHistoryDirty();
+  const [layer] = layersState.layers.splice(sourceIndex, 1);
+  if (targetIndex > sourceIndex) {
+    targetIndex -= 1;
+  }
+  targetIndex = clamp(targetIndex, 0, layersState.layers.length);
+  layersState.layers.splice(targetIndex, 0, layer);
+  renderLayerList();
+  updateLayerDockStatus();
+  compositeLayers();
+  finalizeHistoryEntry();
+}
+
+function renderLayerList() {
+  if (!layerListElement) {
+    return;
+  }
+  layerListElement.innerHTML = '';
+
+  const layersForDisplay = layersState.layers.slice();
+
+  layersForDisplay.forEach((layer) => {
+    const item = document.createElement('div');
+    item.className = 'layer-item';
+    item.dataset.layerId = layer.id;
+    item.dataset.visible = layer.visible ? 'true' : 'false';
+    item.setAttribute('role', 'option');
+    item.id = `layer-option-${layer.id}`;
+    item.draggable = false;
+
+    const isActive = layer.id === layersState.selectedId;
+    if (isActive) {
+      item.dataset.active = 'true';
+      item.setAttribute('aria-selected', 'true');
+    } else {
+      item.dataset.active = 'false';
+      item.setAttribute('aria-selected', 'false');
+    }
+
+    const handleButton = document.createElement('button');
+    handleButton.type = 'button';
+    handleButton.className = 'layer-item__handle';
+    handleButton.setAttribute('data-layer-control', 'drag');
+    handleButton.innerHTML = ICON_LAYER_HANDLE;
+    const handleLabel = `${layer.name} をドラッグで並べ替え`;
+    handleButton.setAttribute('aria-label', handleLabel);
+    handleButton.title = handleLabel;
+    handleButton.draggable = true;
+    handleButton.addEventListener('dragstart', (event) => {
+      layerDragState.draggingId = layer.id;
+      layerDragState.dropBeforeId = null;
+      item.classList.add('layer-item--dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', layer.id);
+        event.dataTransfer.setDragImage(item, 0, 0);
+      }
+    });
+    handleButton.addEventListener('dragend', () => {
+      item.classList.remove('layer-item--dragging');
+      layerDragState.draggingId = null;
+      layerDragState.dropBeforeId = null;
+      clearLayerDragHighlights();
+    });
+    item.appendChild(handleButton);
+
+    const visibilityButton = document.createElement('button');
+    visibilityButton.type = 'button';
+    visibilityButton.className = 'layer-item__visibility';
+    visibilityButton.setAttribute('aria-pressed', layer.visible ? 'true' : 'false');
+    visibilityButton.setAttribute('data-layer-control', 'visibility');
+    visibilityButton.innerHTML = layer.visible ? ICON_LAYER_VISIBLE : ICON_LAYER_HIDDEN;
+    const visibilityLabel = layer.visible ? 'レイヤーを非表示' : 'レイヤーを表示';
+    visibilityButton.setAttribute('aria-label', visibilityLabel);
+    visibilityButton.title = visibilityLabel;
+    visibilityButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleLayerVisibility(layer.id);
+    });
+    item.appendChild(visibilityButton);
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'layer-item__name';
+    nameInput.value = layer.name;
+    nameInput.setAttribute('data-layer-control', 'name');
+    nameInput.maxLength = 40;
+    nameInput.setAttribute('spellcheck', 'false');
+    nameInput.addEventListener('focus', () => {
+      selectLayer(layer.id);
+      nameInput.select();
+    });
+    nameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const trimmed = nameInput.value.trim();
+        if (trimmed.length === 0) {
+          nameInput.value = layer.name;
+        } else {
+          renameLayer(layer.id, trimmed);
+        }
+        nameInput.blur();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        nameInput.value = layer.name;
+        nameInput.blur();
+      }
+    });
+    nameInput.addEventListener('blur', () => {
+      const trimmed = nameInput.value.trim();
+      if (trimmed.length === 0) {
+        nameInput.value = layer.name;
+        return;
+      }
+      if (trimmed !== layer.name) {
+        renameLayer(layer.id, trimmed);
+      }
+    });
+    item.appendChild(nameInput);
+
+    const badge = document.createElement('span');
+    badge.className = 'layer-item__badge';
+    badge.dataset.filled = layer.hasContent ? 'true' : 'false';
+    const badgeLabel = layer.hasContent ? '描画あり' : '空レイヤー';
+    badge.setAttribute('role', 'img');
+    badge.setAttribute('aria-label', badgeLabel);
+    badge.title = badgeLabel;
+    item.appendChild(badge);
+
+    item.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target && target.closest('[data-layer-control]')) {
+        return;
+      }
+      selectLayer(layer.id);
+    });
+
+    item.addEventListener('dragstart', (event) => {
+      if (layerDragState.draggingId !== layer.id) {
+        event.preventDefault();
+        return;
+      }
+      item.classList.add('layer-item--dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', layer.id);
+        event.dataTransfer.setDragImage(item, 0, 0);
+      }
+    });
+
+    item.addEventListener('dragend', () => {
+      item.classList.remove('layer-item--dragging');
+      layerDragState.draggingId = null;
+      layerDragState.dropBeforeId = null;
+      clearLayerDragHighlights();
+    });
+
+    layerListElement.appendChild(item);
+  });
+
+  updateLayerSelectionUI();
+  updateLayerDockStatus();
+  updateLayerControlAvailability();
+  const activeElement = layerListElement.querySelector(`[data-layer-id="${layersState.selectedId}"]`);
+  if (activeElement && typeof activeElement.scrollIntoView === 'function') {
+    activeElement.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function clearLayerDragHighlights() {
+  if (!layerListElement) {
+    return;
+  }
+  Array.from(layerListElement.querySelectorAll('.layer-item--dragover')).forEach((node) => {
+    node.classList.remove('layer-item--dragover');
+  });
+  layerListElement.classList.remove('layer-dock__list--drop-after');
+}
+
+function handleLayerDragOver(event) {
+  if (!layerListElement || !layerDragState.draggingId) {
+    return;
+  }
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+  const items = Array.from(layerListElement.querySelectorAll('.layer-item'));
+  clearLayerDragHighlights();
+
+  let dropBeforeId = null;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const layerId = item.dataset.layerId;
+    if (layerId === layerDragState.draggingId) {
+      continue;
+    }
+    const rect = item.getBoundingClientRect();
+    const midpoint = rect.top + rect.height / 2;
+    if (event.clientY < midpoint) {
+      dropBeforeId = layerId;
+      item.classList.add('layer-item--dragover');
+      break;
+    }
+  }
+  if (!dropBeforeId) {
+    layerListElement.classList.add('layer-dock__list--drop-after');
+  } else {
+    layerListElement.classList.remove('layer-dock__list--drop-after');
+  }
+  layerDragState.dropBeforeId = dropBeforeId;
+}
+
+function handleLayerDrop(event) {
+  if (!layerDragState.draggingId) {
+    return;
+  }
+  event.preventDefault();
+  const dropBeforeId = layerDragState.dropBeforeId;
+  let targetIndex;
+  if (dropBeforeId) {
+    const beforeIndex = getLayerIndex(dropBeforeId);
+    if (beforeIndex === -1) {
+      targetIndex = layersState.layers.length;
+    } else {
+      targetIndex = beforeIndex + 1;
+    }
+  } else {
+    targetIndex = 0;
+  }
+  reorderLayer(layerDragState.draggingId, targetIndex);
+  layerDragState.draggingId = null;
+  layerDragState.dropBeforeId = null;
+  clearLayerDragHighlights();
+}
+
+function handleLayerDragLeave(event) {
+  if (!layerListElement) {
+    return;
+  }
+  if (!(event.relatedTarget instanceof Element) || !layerListElement.contains(event.relatedTarget)) {
+    layerDragState.dropBeforeId = null;
+    clearLayerDragHighlights();
+  }
+}
+
+function initLayers() {
+  if (layersState.layers.length > 0) {
+    return;
+  }
+  const baseLayer = createLayer({ name: 'レイヤー1', imageSource: pixelCanvas });
+  layersState.selectedId = baseLayer.id;
+  renderLayerList();
+  updateLayerDockStatus();
+  updateLayerControlAvailability();
+  compositeLayers();
+  queueStateSave();
+}
 
 function getWrapperMetrics() {
   if (!canvasStage) {
@@ -280,8 +1128,18 @@ function setZoom(value, options = {}) {
       const { min: minOffsetY, max: maxOffsetY } = getOffsetBounds(metrics.rect.height, scaledHeight);
       nextOffsetX = clamp(nextOffsetX, minOffsetX, maxOffsetX);
       nextOffsetY = clamp(nextOffsetY, minOffsetY, maxOffsetY);
-      state.offsetX = nextOffsetX;
-      state.offsetY = nextOffsetY;
+      if (scaledWidth <= metrics.rect.width) {
+        const centeredX = (metrics.rect.width - scaledWidth) / 2;
+        state.offsetX = clamp(centeredX, minOffsetX, maxOffsetX);
+      } else {
+        state.offsetX = nextOffsetX;
+      }
+      if (scaledHeight <= metrics.rect.height) {
+        const centeredY = (metrics.rect.height - scaledHeight) / 2;
+        state.offsetY = clamp(centeredY, minOffsetY, maxOffsetY);
+      } else {
+        state.offsetY = nextOffsetY;
+      }
     }
   } else if (!fromUser) {
     const metrics = getWrapperMetrics();
@@ -387,8 +1245,7 @@ function updateVirtualCursorPosition(x, y, options = {}) {
     }
     virtualCursorState.prevDrawX = clampedX;
     virtualCursorState.prevDrawY = clampedY;
-    renderPreview();
-    updateDotCount();
+    compositeLayers();
     return;
   }
 }
@@ -444,6 +1301,7 @@ function endVirtualDrawing() {
   if (isDrawing) {
     isDrawing = false;
   }
+  finalizeHistoryEntry();
 }
 
 function continueVirtualDrawing() {
@@ -457,8 +1315,7 @@ function continueVirtualDrawing() {
   } else {
     return;
   }
-  renderPreview();
-  updateDotCount();
+  compositeLayers();
 }
 
 function startVirtualDrawing() {
@@ -468,18 +1325,19 @@ function startVirtualDrawing() {
   const { x, y } = virtualCursorState;
   virtualCursorState.prevDrawX = x;
   virtualCursorState.prevDrawY = y;
+  if (state.tool === 'pen' || state.tool === 'eraser' || state.tool === 'fill') {
+    autoCompactAllDocks();
+  }
   if (state.tool === 'pen') {
     isDrawing = true;
     virtualCursorState.drawActive = true;
     drawBrush(x, y);
-    renderPreview();
-    updateDotCount();
+    compositeLayers();
   } else if (state.tool === 'eraser') {
     isDrawing = true;
     virtualCursorState.drawActive = true;
     eraseBrush(x, y);
-    renderPreview();
-    updateDotCount();
+    compositeLayers();
   } else if (state.tool === 'eyedropper') {
     const sampled = getPixelColor(x, y);
     if (sampled) {
@@ -490,8 +1348,7 @@ function startVirtualDrawing() {
     virtualCursorState.prevDrawY = null;
   } else if (state.tool === 'fill') {
     floodFill(x, y, state.color);
-    renderPreview();
-    updateDotCount();
+    compositeLayers();
     virtualCursorState.drawActive = false;
     virtualCursorState.prevDrawX = null;
     virtualCursorState.prevDrawY = null;
@@ -1226,10 +2083,6 @@ function applyDockDisplayState(identifier) {
   const state = dockDisplayState[identifier] || 'expanded';
   dockElement.dataset.state = state;
   updateDockStateControls(identifier);
-  clearDockFade(identifier);
-  if (state === 'compact') {
-    dockElement.dataset.faded = 'false';
-  }
   if (typeof dockElement.__ensureWithinBounds === 'function') {
     dockElement.__ensureWithinBounds();
   }
@@ -1241,6 +2094,7 @@ function setDockDisplayState(identifier, state) {
   }
   const targetState = state === 'compact' ? 'compact' : 'expanded';
   const wasState = dockDisplayState[identifier];
+  delete autoCompactStates[identifier];
   dockDisplayState[identifier] = targetState;
   if (targetState !== 'hidden') {
     DOCK_LAST_ACTIVE_STATE[identifier] = targetState;
@@ -1276,10 +2130,10 @@ function setDockVisibility(identifier, visible) {
     DOCK_LAST_ACTIVE_STATE[identifier] = dockDisplayState[identifier] || 'expanded';
   }
   dockVisibilityState[identifier] = shouldShow;
+  delete autoCompactStates[identifier];
   if (shouldShow) {
     dockElement.dataset.visible = 'true';
     dockElement.removeAttribute('hidden');
-    dockElement.dataset.faded = 'false';
     const restoreState = DOCK_LAST_ACTIVE_STATE[identifier] || dockDisplayState[identifier] || 'expanded';
     dockDisplayState[identifier] = restoreState;
     applyDockDisplayState(identifier);
@@ -1287,7 +2141,6 @@ function setDockVisibility(identifier, visible) {
   } else {
     dockElement.dataset.visible = 'false';
     dockElement.setAttribute('hidden', '');
-    dockElement.dataset.faded = 'false';
   }
   updateDockToggleState(identifier);
   scheduleDockAutoHide();
@@ -1311,8 +2164,157 @@ function clearDockFade(identifier) {
   if (!dockElement) {
     return;
   }
-  dockElement.dataset.faded = 'false';
   dockElement.classList.remove('mini-dock--flash');
+  restoreDockDisplay(identifier);
+}
+
+function restoreDockDisplay(identifier) {
+  if (!dockVisibilityState[identifier]) {
+    delete autoCompactStates[identifier];
+    return;
+  }
+  const previousState = autoCompactStates[identifier];
+  if (!previousState) {
+    return;
+  }
+  delete autoCompactStates[identifier];
+  dockDisplayState[identifier] = previousState;
+  applyDockDisplayState(identifier);
+}
+
+function autoCompactDock(identifier) {
+  if (!dockVisibilityState[identifier]) {
+    return;
+  }
+  if (dockDisplayState[identifier] === 'compact') {
+    return;
+  }
+  if (autoCompactStates[identifier]) {
+    return;
+  }
+  autoCompactStates[identifier] = dockDisplayState[identifier] || 'expanded';
+  dockDisplayState[identifier] = 'compact';
+  applyDockDisplayState(identifier);
+}
+
+function autoCompactAllDocks() {
+  Object.keys(dockElements).forEach((identifier) => {
+    if (!dockElements[identifier]) {
+      return;
+    }
+    autoCompactDock(identifier);
+  });
+}
+
+function setPreviewVisible(visible) {
+  previewVisible = Boolean(visible);
+  if (previewWindow) {
+    previewWindow.hidden = !previewVisible;
+    if (previewVisible) {
+      ensurePreviewWithinBounds();
+    }
+  }
+  if (togglePreviewButton) {
+    togglePreviewButton.setAttribute('aria-pressed', previewVisible ? 'true' : 'false');
+  }
+}
+
+function ensurePreviewWithinBounds() {
+  if (!previewWindow || previewWindow.hidden) {
+    return;
+  }
+  const rect = previewWindow.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    return;
+  }
+  const margin = 12;
+  const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+  const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+  const currentLeft = rect.left;
+  const currentTop = rect.top;
+  const clampedLeft = clamp(currentLeft, margin, maxLeft);
+  const clampedTop = clamp(currentTop, margin, maxTop);
+  previewWindow.style.left = `${clampedLeft}px`;
+  previewWindow.style.top = `${clampedTop}px`;
+  previewWindow.style.right = 'auto';
+  previewWindow.style.bottom = 'auto';
+}
+
+function initPreviewWindow() {
+  if (!previewWindow || !previewHandle) {
+    return;
+  }
+
+  const handlePointerMove = (event) => {
+    if (!previewDragState.active || event.pointerId !== previewDragState.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    const margin = 12;
+    const rect = previewWindow.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - height - margin);
+    let nextLeft = event.clientX - previewDragState.offsetX;
+    let nextTop = event.clientY - previewDragState.offsetY;
+    nextLeft = clamp(nextLeft, margin, maxLeft);
+    nextTop = clamp(nextTop, margin, maxTop);
+    previewWindow.style.left = `${nextLeft}px`;
+    previewWindow.style.top = `${nextTop}px`;
+    previewWindow.style.right = 'auto';
+    previewWindow.style.bottom = 'auto';
+  };
+
+  const endDrag = (event) => {
+    if (!previewDragState.active || event.pointerId !== previewDragState.pointerId) {
+      return;
+    }
+    previewDragState.active = false;
+    previewDragState.pointerId = null;
+    try {
+      previewHandle.releasePointerCapture(event.pointerId);
+    } catch (_) {
+      // noop
+    }
+    window.removeEventListener('pointermove', handlePointerMove);
+    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointercancel', endDrag);
+    ensurePreviewWithinBounds();
+  };
+
+  previewHandle.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const rect = previewWindow.getBoundingClientRect();
+    previewDragState.active = true;
+    previewDragState.pointerId = event.pointerId;
+    previewDragState.offsetX = event.clientX - rect.left;
+    previewDragState.offsetY = event.clientY - rect.top;
+    previewWindow.style.left = `${rect.left}px`;
+    previewWindow.style.top = `${rect.top}px`;
+    previewWindow.style.right = 'auto';
+    previewWindow.style.bottom = 'auto';
+    try {
+      previewHandle.setPointerCapture(event.pointerId);
+    } catch (_) {
+      // noop
+    }
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+  });
+
+  window.addEventListener('resize', () => {
+    if (!previewWindow || previewWindow.hidden) {
+      return;
+    }
+    ensurePreviewWithinBounds();
+  });
+
+  ensurePreviewWithinBounds();
 }
 
 function clearDockAutoHideTimer() {
@@ -1335,13 +2337,10 @@ function scheduleDockAutoHide() {
       if (!dockVisibilityState[identifier]) {
         return;
       }
-      if (dockDisplayState[identifier] === 'compact') {
-        return;
-      }
       if (element.contains(document.activeElement)) {
         return;
       }
-      element.dataset.faded = 'true';
+      autoCompactDock(identifier);
     });
   }, AUTO_HIDE_TIMEOUT_MS);
 }
@@ -1351,8 +2350,8 @@ function flashDock(identifier) {
   if (!dockElement || !dockVisibilityState[identifier]) {
     return;
   }
+  restoreDockDisplay(identifier);
   clearDockAutoHideTimer();
-  dockElement.dataset.faded = 'false';
   if (!docksReady) {
     return;
   }
@@ -1365,17 +2364,12 @@ function flashDock(identifier) {
   scheduleDockAutoHide();
 }
 
-function markDockActive(identifier) {
-  clearDockFade(identifier);
-  flashDock(identifier);
-}
-
 function handleDockPointerEnter(event) {
   const identifier = getDockIdentifierFromElement(event.currentTarget);
   if (!identifier) {
     return;
   }
-  clearDockFade(identifier);
+  restoreDockDisplay(identifier);
   clearDockAutoHideTimer();
 }
 
@@ -1388,7 +2382,7 @@ function handleDockPointerDown(event) {
   if (!identifier) {
     return;
   }
-  clearDockFade(identifier);
+  restoreDockDisplay(identifier);
   clearDockAutoHideTimer();
 }
 
@@ -1397,7 +2391,7 @@ function handleDockFocusIn(event) {
   if (!identifier) {
     return;
   }
-  clearDockFade(identifier);
+  restoreDockDisplay(identifier);
   clearDockAutoHideTimer();
 }
 
@@ -1406,9 +2400,6 @@ function handleDockFocusOut() {
 }
 
 function handleGlobalInteraction() {
-  Object.keys(dockElements).forEach((identifier) => {
-    clearDockFade(identifier);
-  });
   scheduleDockAutoHide();
 }
 
@@ -1423,7 +2414,6 @@ function setupDockAutoHide() {
     element.addEventListener('pointercancel', handleDockPointerDown);
     element.addEventListener('focusin', handleDockFocusIn);
     element.addEventListener('focusout', handleDockFocusOut);
-    element.dataset.faded = 'false';
   });
   ['pointerdown', 'touchstart', 'keydown', 'wheel'].forEach((type) => {
     window.addEventListener(type, handleGlobalInteraction, { passive: true });
@@ -1528,7 +2518,8 @@ function updateBrushSize(value) {
   scheduleDockAutoHide();
 }
 
-function updatePixelSize() {
+function updatePixelSize(options = {}) {
+  const { skipComposite = false } = options;
   state.pixelSize = FIXED_PIXEL_SIZE;
   if (pixelSizeInput) {
     pixelSizeInput.value = String(FIXED_PIXEL_SIZE);
@@ -1539,10 +2530,12 @@ function updatePixelSize() {
   } else {
     applyCanvasZoom();
   }
-  renderPreview();
+  if (!skipComposite) {
+    compositeLayers();
+    flashDock('canvasDock');
+    scheduleDockAutoHide();
+  }
   updateCanvasDockStatus();
-  flashDock('canvasDock');
-  scheduleDockAutoHide();
 }
 
 function updatePreviewSize() {
@@ -1567,19 +2560,56 @@ function updatePreviewSize() {
 
 function initPalette() {
   paletteContainer.innerHTML = '';
+  addPaletteButton = null;
   defaultPalette.forEach((hex) => {
-    const normalized = normalizeHex(hex);
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'swatch';
-    button.style.backgroundColor = normalized;
-    button.dataset.color = normalized;
-    button.setAttribute('aria-label', `カラー ${normalized}`);
-    setupSwatchInteractions(button);
+    const button = createPaletteSwatch(hex);
     paletteContainer.appendChild(button);
   });
+  ensurePaletteAddButton();
   setActiveColor(state.color || defaultPalette[0], null, { closePanel: false });
   updatePaletteDockStatus();
+}
+
+function createPaletteSwatch(hex) {
+  const normalized = normalizeHex(hex);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'swatch';
+  button.style.backgroundColor = normalized;
+  button.dataset.color = normalized;
+  button.setAttribute('aria-label', `カラー ${normalized}`);
+  setupSwatchInteractions(button);
+  return button;
+}
+
+function ensurePaletteAddButton() {
+  if (!paletteContainer) {
+    return;
+  }
+  if (addPaletteButton && addPaletteButton.parentElement === paletteContainer) {
+    paletteContainer.removeChild(addPaletteButton);
+  }
+  addPaletteButton = document.createElement('button');
+  addPaletteButton.type = 'button';
+  addPaletteButton.className = 'swatch swatch--add';
+  addPaletteButton.setAttribute('aria-label', '色を追加');
+  addPaletteButton.addEventListener('click', () => {
+    addPaletteColor();
+  });
+  paletteContainer.appendChild(addPaletteButton);
+}
+
+function addPaletteColor() {
+  const newColor = state.color || '#ffffff';
+  const normalized = normalizeHex(newColor);
+  const button = createPaletteSwatch(normalized);
+  if (addPaletteButton && addPaletteButton.parentElement === paletteContainer) {
+    paletteContainer.insertBefore(button, addPaletteButton);
+  } else {
+    paletteContainer.appendChild(button);
+    ensurePaletteAddButton();
+  }
+  setActiveColor(normalized, button, { closePanel: false });
 }
 
 function getPointerPosition(event) {
@@ -1603,14 +2633,25 @@ function applyBrush(x, y, handler) {
   }
 }
 
-function drawBrush(x, y) {
-  ctx.fillStyle = state.color;
+function drawBrush(x, y, targetCtx = null) {
+  const activeLayer = targetCtx ? null : getActiveLayer();
+  const context = targetCtx || activeLayer?.ctx;
+  if (!context) {
+    return;
+  }
+  markHistoryDirty();
+  context.fillStyle = state.color;
   applyBrush(x, y, (px, py) => {
-    ctx.fillRect(px, py, 1, 1);
+    context.fillRect(px, py, 1, 1);
   });
 }
 
 function drawLine(x0, y0, x1, y1, usePen = true) {
+  const activeLayer = getActiveLayer();
+  if (!activeLayer) {
+    return;
+  }
+  const layerCtx = activeLayer.ctx;
   const dx = Math.abs(x1 - x0);
   const dy = Math.abs(y1 - y0);
   let sx = x0 < x1 ? 1 : -1;
@@ -1622,9 +2663,9 @@ function drawLine(x0, y0, x1, y1, usePen = true) {
 
   while (true) {
     if (usePen) {
-      drawBrush(currentX, currentY);
+      drawBrush(currentX, currentY, layerCtx);
     } else {
-      eraseBrush(currentX, currentY);
+      eraseBrush(currentX, currentY, layerCtx);
     }
     if (currentX === x1 && currentY === y1) {
       break;
@@ -1641,9 +2682,15 @@ function drawLine(x0, y0, x1, y1, usePen = true) {
   }
 }
 
-function eraseBrush(x, y) {
+function eraseBrush(x, y, targetCtx = null) {
+  const activeLayer = targetCtx ? null : getActiveLayer();
+  const context = targetCtx || activeLayer?.ctx;
+  if (!context) {
+    return;
+  }
+  markHistoryDirty();
   applyBrush(x, y, (px, py) => {
-    ctx.clearRect(px, py, 1, 1);
+    context.clearRect(px, py, 1, 1);
   });
 }
 
@@ -1666,8 +2713,12 @@ function hexToUint32(hex) {
 }
 
 function floodFill(x, y, hexColor) {
-  // Flood fill implemented with an explicit stack over the Uint32 canvas buffer.
-  const imageData = ctx.getImageData(0, 0, state.width, state.height);
+  const activeLayer = getActiveLayer();
+  if (!activeLayer) {
+    return;
+  }
+  const layerCtx = activeLayer.ctx;
+  const imageData = layerCtx.getImageData(0, 0, state.width, state.height);
   const pixels = new Uint32Array(imageData.data.buffer);
   const targetIndex = y * state.width + x;
   const targetColor = pixels[targetIndex];
@@ -1691,7 +2742,8 @@ function floodFill(x, y, hexColor) {
     if (cy < state.height - 1) stack.push([cx, cy + 1]);
   }
 
-  ctx.putImageData(imageData, 0, 0);
+  layerCtx.putImageData(imageData, 0, 0);
+  markHistoryDirty();
 }
 
 function updateCursorInfo(x = null, y = null) {
@@ -1722,18 +2774,35 @@ function renderPreview() {
 function resizeCanvas(newWidth, newHeight) {
   const clampedWidth = clamp(newWidth, Number(widthInput.min), Number(widthInput.max));
   const clampedHeight = clamp(newHeight, Number(heightInput.min), Number(heightInput.max));
-  const snapshot = ctx.getImageData(0, 0, Math.min(clampedWidth, state.width), Math.min(clampedHeight, state.height));
+  const oldWidth = state.width;
+  const oldHeight = state.height;
+  const copyWidth = Math.min(clampedWidth, oldWidth);
+  const copyHeight = Math.min(clampedHeight, oldHeight);
+
+  if (clampedWidth === oldWidth && clampedHeight === oldHeight) {
+    return;
+  }
+
+  markHistoryDirty();
+
+  layersState.layers.forEach((layer) => {
+    const snapshot = layer.ctx.getImageData(0, 0, copyWidth, copyHeight);
+    layer.canvas.width = clampedWidth;
+    layer.canvas.height = clampedHeight;
+    layer.ctx.imageSmoothingEnabled = false;
+    layer.ctx.putImageData(snapshot, 0, 0);
+  });
 
   pixelCanvas.width = clampedWidth;
   pixelCanvas.height = clampedHeight;
-  ctx.putImageData(snapshot, 0, 0);
+  ctx.imageSmoothingEnabled = false;
 
   state.width = clampedWidth;
   state.height = clampedHeight;
   widthInput.value = String(clampedWidth);
   heightInput.value = String(clampedHeight);
-  updatePixelSize();
-  updateDotCount();
+  updatePixelSize({ skipComposite: true });
+  compositeLayers();
   refreshExportOptions();
   if (virtualCursorState.enabled) {
     updateVirtualCursorPosition(virtualCursorState.x, virtualCursorState.y);
@@ -1741,16 +2810,25 @@ function resizeCanvas(newWidth, newHeight) {
   updateCanvasDockStatus();
   flashDock('canvasDock');
   scheduleDockAutoHide();
+  finalizeHistoryEntry();
 }
 
 function clearCanvas() {
-  ctx.clearRect(0, 0, state.width, state.height);
-  renderPreview();
-  updateDotCount();
+  const hasContent = layersState.layers.some((layer) => layer.hasContent);
+  if (!hasContent) {
+    return;
+  }
+  markHistoryDirty();
+  layersState.layers.forEach((layer) => {
+    layer.ctx.clearRect(0, 0, state.width, state.height);
+  });
+  compositeLayers();
+  finalizeHistoryEntry();
 }
 
 function exportImage(multiplier = 1) {
   const clampedMultiplier = Math.max(1, Math.min(multiplier, Math.floor(MAX_EXPORT_DIMENSION / Math.max(state.width, state.height)) || 1));
+  compositeLayers({ skipUIUpdate: true, skipContentCheck: true });
   const exportCanvas = document.createElement('canvas');
   exportCanvas.width = state.width * clampedMultiplier;
   exportCanvas.height = state.height * clampedMultiplier;
@@ -1814,6 +2892,8 @@ function handlePointerDown(event) {
     }
   }
 
+  autoCompactAllDocks();
+
   if (state.tool === 'pen') {
     isDrawing = true;
     drawBrush(x, y);
@@ -1831,11 +2911,8 @@ function handlePointerDown(event) {
 
   updateCursorInfo(x, y);
   if (state.tool !== 'eyedropper') {
-    renderPreview();
-    updateDotCount();
+    compositeLayers();
   }
-  markDockActive('toolDock');
-  markDockActive('paletteDock');
 }
 
 function handlePointerMove(event) {
@@ -1898,8 +2975,7 @@ function handlePointerMove(event) {
     } else if (state.tool === 'eraser') {
       eraseBrush(x, y);
     }
-    renderPreview();
-    updateDotCount();
+    compositeLayers();
     return;
   }
 
@@ -1909,8 +2985,7 @@ function handlePointerMove(event) {
     drawLine(previousPointer.x, previousPointer.y, x, y, false);
   }
   previousPointer = { x, y, inBounds: true };
-  renderPreview();
-  updateDotCount();
+  compositeLayers();
 }
 
 function handlePointerUp(event) {
@@ -1947,6 +3022,7 @@ function handlePointerUp(event) {
   activePointerId = null;
   isDrawing = false;
   previousPointer = { x: 0, y: 0, inBounds: false };
+  finalizeHistoryEntry();
 }
 
 function initEvents() {
@@ -2038,8 +3114,26 @@ function initEvents() {
   }
 
   window.addEventListener('keydown', (event) => {
+    const targetElement = event.target instanceof HTMLElement ? event.target : null;
+    const tagName = targetElement ? targetElement.tagName : '';
+    const isTextField = targetElement && (targetElement.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA');
     if (event.key === 'Escape' && activePanel) {
       closeActivePanel();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !isTextField) {
+      const key = event.key.toLowerCase();
+      if (key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          performRedo();
+        } else {
+          performUndo();
+        }
+      } else if (key === 'y') {
+        event.preventDefault();
+        performRedo();
+      }
     }
   });
 
@@ -2056,19 +3150,60 @@ function initEvents() {
   }
 }
 
-function init() {
+async function init() {
   pixelCanvas.style.cursor = 'crosshair';
   pixelCanvas.style.touchAction = 'none';
   initPalette();
   initVirtualCursorUI();
+  let restored = false;
+  try {
+    restored = await restoreProjectState();
+  } catch (error) {
+    console.warn('レイヤー構成の復元処理でエラーが発生しました', error);
+    restored = false;
+  }
+  if (!restored) {
+    initLayers();
+  }
   setActiveTool(state.tool);
   if (virtualCursorToggle) {
     virtualCursorToggle.setAttribute('aria-pressed', 'false');
   }
+  if (addLayerButton) {
+    addLayerButton.addEventListener('click', () => {
+      addLayer();
+    });
+  }
+  if (deleteLayerButton) {
+    deleteLayerButton.addEventListener('click', () => {
+      const activeLayer = getActiveLayer();
+      if (activeLayer) {
+        deleteLayer(activeLayer.id);
+      }
+    });
+  }
+  if (togglePreviewButton) {
+    togglePreviewButton.addEventListener('click', () => {
+      setPreviewVisible(!previewVisible);
+    });
+  }
+  if (undoButton) {
+    undoButton.addEventListener('click', () => {
+      performUndo();
+    });
+  }
+  if (redoButton) {
+    redoButton.addEventListener('click', () => {
+      performRedo();
+    });
+  }
+  if (layerListElement) {
+    layerListElement.addEventListener('dragover', handleLayerDragOver);
+    layerListElement.addEventListener('drop', handleLayerDrop);
+    layerListElement.addEventListener('dragleave', handleLayerDragLeave);
+  }
   updateBrushSize(state.brushSize);
   updatePixelSize();
-  updateDotCount();
-  renderPreview();
   closeActivePanel();
   setDockCollapsed(false);
   if (!userMovedDock) {
@@ -2077,6 +3212,7 @@ function init() {
   makeDockDraggable(toolDock, toolDockHandle);
   makeDockDraggable(paletteDock, paletteDockHandle);
   makeDockDraggable(canvasDock, canvasDockHandle);
+  makeDockDraggable(layerDock, layerDockHandle);
   Object.keys(dockElements).forEach((identifier) => {
     if (!dockElements[identifier]) {
       return;
@@ -2101,11 +3237,15 @@ function init() {
   refreshExportOptions();
   initDockDrag();
   initZoomControls();
+  initPreviewWindow();
   initEvents();
   updateToolDockStatus();
   updatePaletteDockStatus();
   updateCanvasDockStatus();
   setupDockAutoHide();
+  setPreviewVisible(true);
+  resetHistory();
+  queueStateSave();
 }
 
 init();
