@@ -94,6 +94,7 @@ const MAX_EXPORT_DIMENSION = 1024;
 const FIXED_PIXEL_SIZE = 20;
 const VIRTUAL_CURSOR_SENSITIVITY = 1;
 const DOCK_SNAP_DISTANCE = 48;
+const DOCK_BOTTOM_ANCHOR_THRESHOLD = 32;
 const AUTO_HIDE_TIMEOUT_MS = 6000;
 let dockAutoHideTimer = null;
 let docksReady = false;
@@ -197,6 +198,12 @@ const historyStack = [];
 const redoStack = [];
 let historyDirty = false;
 const autoCompactStates = {};
+const miniDockUserMoved = {
+  toolDock: false,
+  paletteDock: false,
+  canvasDock: false,
+  layerDock: false,
+};
 const previewDragState = {
   active: false,
   pointerId: null,
@@ -1739,6 +1746,7 @@ function closePanelIfActive(panelId) {
 }
 
 const SWATCH_LONG_PRESS_MS = 600;
+const SWATCH_DRAG_THRESHOLD = 6;
 
 function openSwatchEditor(button) {
   editingSwatch = button;
@@ -1747,9 +1755,55 @@ function openSwatchEditor(button) {
   colorPicker.click();
 }
 
+function findPaletteSwatchAtPoint(clientX, clientY, source = null) {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const element = document.elementFromPoint(clientX, clientY);
+  if (!(element instanceof HTMLElement)) {
+    return null;
+  }
+  const swatch = element.classList.contains('swatch') ? element : element.closest('.swatch');
+  if (!(swatch instanceof HTMLElement)) {
+    return null;
+  }
+  if (!paletteContainer?.contains(swatch) || swatch === source || swatch.classList.contains('swatch--add')) {
+    return null;
+  }
+  return swatch;
+}
+
+function swapSwatchColors(source, target) {
+  if (!source || !target || source === target) {
+    return;
+  }
+  const sourceColor = normalizeHex(source.dataset.color || source.style.backgroundColor);
+  const targetColor = normalizeHex(target.dataset.color || target.style.backgroundColor);
+  if (sourceColor === targetColor) {
+    return;
+  }
+  source.dataset.color = targetColor;
+  source.style.backgroundColor = targetColor;
+  target.dataset.color = sourceColor;
+  target.style.backgroundColor = sourceColor;
+  if (activeSwatch === source) {
+    setActiveColor(targetColor, source, { closePanel: false });
+  } else if (activeSwatch === target) {
+    setActiveColor(sourceColor, target, { closePanel: false });
+  }
+}
+
 function setupSwatchInteractions(button) {
   let longPressTimer = null;
   let longPressTriggered = false;
+  const dragState = {
+    pointerId: null,
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    dropTarget: null,
+    suppressClick: false,
+  };
 
   const clearTimer = () => {
     if (longPressTimer !== null) {
@@ -1758,12 +1812,45 @@ function setupSwatchInteractions(button) {
     }
   };
 
+  const cancelLongPress = () => {
+    clearTimer();
+  };
+
+  const clearDropTarget = () => {
+    if (dragState.dropTarget) {
+      dragState.dropTarget.classList.remove('swatch--drop-target');
+      dragState.dropTarget = null;
+    }
+  };
+
+  const endDrag = () => {
+    if (dragState.dragging) {
+      button.classList.remove('swatch--dragging');
+    }
+    clearDropTarget();
+    dragState.pointerId = null;
+    dragState.dragging = false;
+  };
+
   button.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) {
       return;
     }
     longPressTriggered = false;
+    dragState.suppressClick = false;
+    dragState.pointerId = event.pointerId;
+    dragState.startX = event.clientX;
+    dragState.startY = event.clientY;
+    dragState.dragging = false;
+    clearDropTarget();
     button.dataset.longPressActive = 'false';
+    if (typeof button.setPointerCapture === 'function') {
+      try {
+        button.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // ignore pointer capture failures
+      }
+    }
     longPressTimer = window.setTimeout(() => {
       longPressTriggered = true;
       button.dataset.longPressActive = 'true';
@@ -1771,12 +1858,63 @@ function setupSwatchInteractions(button) {
     }, SWATCH_LONG_PRESS_MS);
   });
 
-  const cancelLongPress = () => {
-    clearTimer();
-  };
+  button.addEventListener('pointermove', (event) => {
+    if (dragState.pointerId !== event.pointerId) {
+      return;
+    }
+    if (!dragState.dragging) {
+      const dx = event.clientX - dragState.startX;
+      const dy = event.clientY - dragState.startY;
+      if (Math.hypot(dx, dy) < SWATCH_DRAG_THRESHOLD) {
+        return;
+      }
+      dragState.dragging = true;
+      cancelLongPress();
+      button.dataset.longPressActive = 'false';
+      button.classList.add('swatch--dragging');
+    }
+    event.preventDefault();
+    const target = findPaletteSwatchAtPoint(event.clientX, event.clientY, button);
+    if (target !== dragState.dropTarget) {
+      clearDropTarget();
+      if (target) {
+        target.classList.add('swatch--drop-target');
+        dragState.dropTarget = target;
+      }
+    }
+  });
 
-  button.addEventListener('pointerup', () => {
+  button.addEventListener('pointerup', (event) => {
+    if (dragState.pointerId !== event.pointerId) {
+      cancelLongPress();
+      if (longPressTriggered) {
+        window.setTimeout(() => {
+          button.dataset.longPressActive = 'false';
+        }, 0);
+      }
+      return;
+    }
     cancelLongPress();
+    if (
+      typeof button.releasePointerCapture === 'function' &&
+      typeof button.hasPointerCapture === 'function' &&
+      button.hasPointerCapture(event.pointerId)
+    ) {
+      try {
+        button.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        // ignore release failures
+      }
+    }
+    const wasDragging = dragState.dragging;
+    const dropTarget = dragState.dropTarget;
+    endDrag();
+    if (wasDragging) {
+      dragState.suppressClick = true;
+      if (dropTarget) {
+        swapSwatchColors(button, dropTarget);
+      }
+    }
     if (longPressTriggered) {
       window.setTimeout(() => {
         button.dataset.longPressActive = 'false';
@@ -1785,9 +1923,35 @@ function setupSwatchInteractions(button) {
   });
 
   button.addEventListener('pointerleave', cancelLongPress);
-  button.addEventListener('pointercancel', cancelLongPress);
+
+  button.addEventListener('pointercancel', (event) => {
+    cancelLongPress();
+    if (
+      dragState.pointerId === event.pointerId &&
+      typeof button.releasePointerCapture === 'function' &&
+      typeof button.hasPointerCapture === 'function' &&
+      button.hasPointerCapture(event.pointerId)
+    ) {
+      try {
+        button.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        // ignore release failures
+      }
+    }
+    const wasDragging = dragState.dragging;
+    endDrag();
+    if (wasDragging) {
+      dragState.suppressClick = true;
+    }
+  });
 
   button.addEventListener('click', (event) => {
+    if (dragState.suppressClick) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      dragState.suppressClick = false;
+      return;
+    }
     if (button.dataset.longPressActive === 'true') {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -1899,6 +2063,7 @@ function makeDockDraggable(dockElement, handleElement) {
     dockElement.style.left = `${clampedLeft}px`;
     dockElement.style.top = `${clampedTop}px`;
     dockElement.style.right = 'auto';
+    dockElement.style.bottom = 'auto';
   };
 
   const ensureWithinBounds = () => {
@@ -1912,6 +2077,7 @@ function makeDockDraggable(dockElement, handleElement) {
     dockElement.style.left = `${rect.left}px`;
     dockElement.style.top = `${rect.top}px`;
     dockElement.style.right = 'auto';
+    dockElement.style.bottom = 'auto';
     clampPosition(rect.left, rect.top);
   };
 
@@ -1956,6 +2122,9 @@ function makeDockDraggable(dockElement, handleElement) {
     const identifier = getDockIdentifierFromElement(dockElement);
     if (identifier) {
       clearDockFade(identifier);
+      if (Object.prototype.hasOwnProperty.call(miniDockUserMoved, identifier)) {
+        miniDockUserMoved[identifier] = true;
+      }
     }
     clearDockAutoHideTimer();
     try {
@@ -2080,9 +2249,23 @@ function applyDockDisplayState(identifier) {
   if (!dockElement) {
     return;
   }
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+  const previousRect = dockElement.getBoundingClientRect();
+  const rawBottomGap = viewportHeight > 0 ? viewportHeight - previousRect.bottom : Infinity;
+  const anchoredToBottom = Math.abs(rawBottomGap) <= DOCK_BOTTOM_ANCHOR_THRESHOLD;
   const state = dockDisplayState[identifier] || 'expanded';
   dockElement.dataset.state = state;
   updateDockStateControls(identifier);
+  if (anchoredToBottom && viewportHeight > 0) {
+    const nextRect = dockElement.getBoundingClientRect();
+    const margin = 12;
+    const preservedGap = Math.max(0, rawBottomGap);
+    const maxTop = Math.max(margin, viewportHeight - nextRect.height - margin);
+    const targetTop = viewportHeight - preservedGap - nextRect.height;
+    const clampedTop = clamp(targetTop, margin, maxTop);
+    dockElement.style.top = `${clampedTop}px`;
+    dockElement.style.bottom = 'auto';
+  }
   if (typeof dockElement.__ensureWithinBounds === 'function') {
     dockElement.__ensureWithinBounds();
   }
@@ -2430,13 +2613,68 @@ function alignDockForViewport() {
   const vh = window.innerHeight;
   const width = floatingDock.offsetWidth;
   const height = floatingDock.offsetHeight;
-  if (vw <= 720 || vh <= 620) {
-    const centeredLeft = Math.max(12, (vw - width) / 2);
-    const bottomTop = Math.max(12, vh - height - 24);
-    setDockPosition(centeredLeft, bottomTop);
-  } else {
-    setDockPosition(24, 24);
+  const margin = 24;
+  let targetTop = margin;
+  if (vh <= 620) {
+    targetTop = Math.max(margin, vh - height - margin);
   }
+  setDockPosition(margin, targetTop);
+}
+
+function setDockAbsolutePosition(dockElement, left, top) {
+  if (!dockElement) {
+    return;
+  }
+  const width = dockElement.offsetWidth;
+  const height = dockElement.offsetHeight;
+  if (width === 0 && height === 0) {
+    return;
+  }
+  const maxLeft = Math.max(12, window.innerWidth - width - 12);
+  const maxTop = Math.max(12, window.innerHeight - height - 12);
+  const clampedLeft = clamp(left, 12, maxLeft);
+  const clampedTop = clamp(top, 12, maxTop);
+  dockElement.style.left = `${clampedLeft}px`;
+  dockElement.style.top = `${clampedTop}px`;
+  dockElement.style.right = 'auto';
+  dockElement.style.bottom = 'auto';
+  if (typeof dockElement.__ensureWithinBounds === 'function') {
+    dockElement.__ensureWithinBounds();
+  }
+}
+
+function positionDefaultMiniDocks() {
+  const margin = 24;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+
+  if (toolDock && !miniDockUserMoved.toolDock) {
+    setDockAbsolutePosition(toolDock, margin, margin);
+  }
+
+  if (paletteDock && !miniDockUserMoved.paletteDock) {
+    const width = paletteDock.offsetWidth;
+    const left = viewportWidth - width - margin;
+    setDockAbsolutePosition(paletteDock, left, margin);
+  }
+
+  if (canvasDock && !miniDockUserMoved.canvasDock) {
+    const width = canvasDock.offsetWidth;
+    const height = canvasDock.offsetHeight;
+    const left = viewportWidth - width - margin;
+    const top = viewportHeight - height - margin;
+    setDockAbsolutePosition(canvasDock, left, top);
+  }
+
+  if (layerDock && !miniDockUserMoved.layerDock) {
+    const height = layerDock.offsetHeight;
+    const top = viewportHeight - height - margin;
+    setDockAbsolutePosition(layerDock, margin, top);
+  }
+}
+
+function handleMiniDockResize() {
+  positionDefaultMiniDocks();
 }
 
 function setDockCollapsed(collapsed) {
@@ -3205,7 +3443,8 @@ async function init() {
   updateBrushSize(state.brushSize);
   updatePixelSize();
   closeActivePanel();
-  setDockCollapsed(false);
+  const initialCollapsed = floatingDock?.dataset.collapsed === 'true';
+  setDockCollapsed(initialCollapsed);
   if (!userMovedDock) {
     alignDockForViewport();
   }
@@ -3213,6 +3452,8 @@ async function init() {
   makeDockDraggable(paletteDock, paletteDockHandle);
   makeDockDraggable(canvasDock, canvasDockHandle);
   makeDockDraggable(layerDock, layerDockHandle);
+  positionDefaultMiniDocks();
+  window.addEventListener('resize', handleMiniDockResize);
   Object.keys(dockElements).forEach((identifier) => {
     if (!dockElements[identifier]) {
       return;
