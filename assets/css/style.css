@@ -257,6 +257,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  touch-action: none;
 }
 
 .mini-dock__drag {
@@ -266,6 +267,7 @@ body {
   align-items: center;
   padding: 6px 0;
   cursor: grab;
+  touch-action: none;
 }
 
 .floating-dock__group--mini .mini-dock[data-visible='false']:not([data-menu-expanded='true']) {
