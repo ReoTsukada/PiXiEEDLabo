@@ -330,15 +330,16 @@ body {
 }
 
 .mini-dock__grid--tools {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: 100%;
   justify-items: center;
+  gap: 4px;
 }
 
 .mini-dock__grid--palette {
   width: 100%;
   justify-items: stretch;
-  gap: 4px;
+  gap: 6px;
 }
 
 
@@ -960,8 +961,8 @@ body {
 
 .swatch-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 24px));
-  gap: 4px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .swatch {
@@ -975,6 +976,15 @@ body {
 .swatch--active {
   border-color: rgba(88, 196, 255, 0.8);
   box-shadow: 0 0 0 4px rgba(88, 196, 255, 0.15);
+}
+
+.swatch--dragging {
+  opacity: 0.6;
+  cursor: grabbing;
+}
+
+.swatch--drop-target {
+  box-shadow: 0 0 0 4px rgba(88, 196, 255, 0.35);
 }
 
 @media (max-width: 960px) {
