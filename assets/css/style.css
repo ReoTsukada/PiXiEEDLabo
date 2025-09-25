@@ -9,6 +9,8 @@
   --danger: #ff6b6b;
   --border: rgba(255, 255, 255, 0.08);
   --shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
+  --dock-button-size: 56px;
+  --dock-button-radius: 14px;
   font-family: 'Inter', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
 }
 
@@ -40,6 +42,7 @@ body {
 body {
   display: block;
   overflow: hidden;
+  border-radius: 0;
 }
 
 :root {
@@ -133,6 +136,12 @@ body {
   gap: 10px;
 }
 
+.floating-dock__grip {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
 .floating-dock__toggle,
 .floating-dock__handle {
   width: 44px;
@@ -156,14 +165,47 @@ body {
 .floating-dock__handle {
   cursor: grab;
   user-select: none;
-  font-size: 16px;
-  line-height: 1;
+  width: 72px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.floating-dock__handle .mini-dock__drag-line {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.32);
+  transition: background 160ms ease;
+}
+
+.floating-dock__handle:hover .mini-dock__drag-line,
+.floating-dock__handle--dragging .mini-dock__drag-line {
+  background: rgba(88, 196, 255, 0.6);
 }
 
 .floating-dock__handle:active,
 .floating-dock__handle--dragging {
   cursor: grabbing;
   background: rgba(255, 255, 255, 0.2);
+}
+
+.floating-dock__handle .mini-dock__drag-line {
+  width: 32px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.32);
+  transition: background 160ms ease;
+}
+
+.floating-dock__handle:hover .mini-dock__drag-line,
+.floating-dock__handle--dragging .mini-dock__drag-line {
+  background: rgba(88, 196, 255, 0.6);
 }
 
 .floating-dock__toggle svg {
@@ -326,16 +368,22 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.05);
   color: inherit;
-  border-radius: 12px;
-  padding: 6px 10px;
+  border-radius: var(--dock-button-radius);
+  width: var(--dock-button-size);
+  height: var(--dock-button-size);
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 0;
   cursor: pointer;
   transition: background 120ms ease, border 120ms ease, transform 120ms ease;
   appearance: none;
   font: inherit;
   line-height: 1.1;
+  box-sizing: border-box;
+  text-align: center;
+  flex-shrink: 0;
 }
 
 .mini-dock__status-button:hover {
@@ -388,10 +436,13 @@ body {
   font-size: 12px;
   color: var(--fg-muted);
   font-weight: 600;
-  max-width: 48px;
+  max-width: calc(var(--dock-button-size) - 12px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
+  display: inline-block;
+  padding: 0 4px;
 }
 
 .mini-dock[data-state='compact'] {
@@ -404,8 +455,9 @@ body {
 }
 
 .mini-dock[data-visible='false'] .mini-dock__status-button {
-  padding: 10px;
-  width: 100%;
+  padding: 0;
+  width: var(--dock-button-size);
+  height: var(--dock-button-size);
   justify-content: center;
   background: transparent;
   border-color: transparent;
@@ -443,7 +495,7 @@ body {
 
 
 .mini-dock[data-state='compact'] .mini-dock__status-button {
-  padding: 6px;
+  padding: 0;
 }
 
 .mini-dock__grid {
@@ -462,6 +514,14 @@ body {
   width: 100%;
   justify-items: stretch;
   gap: 6px;
+}
+
+.mini-dock__selection-panel {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 
@@ -637,9 +697,9 @@ body {
 }
 
 .dock-icon-button {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
+  width: var(--dock-button-size);
+  height: var(--dock-button-size);
+  border-radius: var(--dock-button-radius);
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.06);
   color: var(--fg);
@@ -735,6 +795,10 @@ body {
   height: 44px;
 }
 
+.floating-dock[data-collapsed='true'] .floating-dock__grip {
+  margin-bottom: 2px;
+}
+
 .floating-dock[data-collapsed='true'] .floating-dock__toggle svg {
   transform: rotate(180deg);
 }
@@ -758,8 +822,10 @@ body {
   }
 
   .app-footer {
-    right: 12px;
-    bottom: 12px;
+    left: 50%;
+    right: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
     padding: 6px 10px;
     font-size: 10px;
   }
@@ -779,26 +845,95 @@ body {
   }
 
   .floating-dock {
-    left: 50% !important;
-    right: auto !important;
+    left: 12px !important;
+    right: 12px !important;
     top: auto !important;
     bottom: calc(16px + env(safe-area-inset-bottom)) !important;
-    transform: translateX(-50%);
+    max-width: calc(100vw - 24px);
+    transform: none;
+    border-radius: 18px;
+    padding: 12px 14px;
   }
 
   .floating-dock[data-collapsed='true'] {
-    left: 50% !important;
+    left: 12px !important;
+    right: 12px !important;
     bottom: calc(16px + env(safe-area-inset-bottom)) !important;
+    transform: none;
+  }
+
+  .floating-dock__bar {
+    justify-content: space-between;
+  }
+
+  .floating-dock__toggle {
+    width: 42px;
+    height: 42px;
+  }
+
+  .floating-dock__handle {
+    width: 72px;
+    height: 18px;
+  }
+
+  .floating-dock__handle .mini-dock__drag-line {
+    width: 36px;
+  }
+
+  .floating-dock__content {
+    grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
+  }
+
+  .floating-dock__group {
+    justify-content: center;
+  }
+
+  .app-footer {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
   }
 }
 
 @media (pointer: coarse) and (orientation: landscape) {
+  :root {
+    --footer-safe-area: 72px;
+  }
+
+  .app-stage {
+    padding: 12px 12px calc(72px + env(safe-area-inset-bottom));
+    justify-content: center;
+    align-items: center;
+  }
+
   .floating-dock {
     transform: none;
     left: 24px !important;
-    top: 24px !important;
-    right: auto !important;
+    right: 24px !important;
+    top: 16px !important;
     bottom: auto !important;
+    max-width: calc(100vw - 48px);
+    padding: 12px 14px;
+  }
+
+  .floating-dock__handle .mini-dock__drag-line {
+    width: 36px;
+  }
+
+  .canvas-wrapper {
+    width: calc(100vw - 24px);
+    max-width: 900px;
+    padding: 16px;
+    min-width: 200px;
+    min-height: 200px;
+    height: calc(100vh - (96px + env(safe-area-inset-bottom)));
+  }
+
+  .app-footer {
+    left: auto;
+    right: 24px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    transform: none;
   }
 }
 
@@ -823,7 +958,7 @@ body {
   display: grid;
   place-items: center;
   background: #000;
-  border-radius: 24px;
+  border-radius: 0;
   border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 32px;
   min-width: max(220px, min(320px, calc(100vw - 48px)));
@@ -856,6 +991,31 @@ body {
     linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.22) 75%);
   background-size: calc(var(--pixel-cell) * 2) calc(var(--pixel-cell) * 2);
   background-position: 0 0, 0 var(--pixel-cell), var(--pixel-cell) calc(-1 * var(--pixel-cell)), calc(-1 * var(--pixel-cell)) 0;
+}
+
+.canvas-stage--pan-ready {
+  cursor: grab;
+}
+
+.canvas-stage--panning {
+  cursor: grabbing;
+}
+
+.selection-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  image-rendering: pixelated;
+}
+
+.selection-canvas--outline {
+  z-index: 2;
+}
+
+.selection-canvas--content {
+  z-index: 1;
 }
 
 .canvas-wrapper::before {
@@ -901,6 +1061,7 @@ body {
   backdrop-filter: blur(18px);
   z-index: 56;
   transition: opacity 140ms ease;
+  touch-action: none;
 }
 
 .virtual-draw-control[data-visible='false'] {
@@ -909,23 +1070,28 @@ body {
 }
 
 .virtual-draw-control__handle {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.08);
   color: var(--fg);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: grab;
+  touch-action: none;
   user-select: none;
-  font-size: 18px;
-  line-height: 1;
+  padding: 0;
 }
 
 .virtual-draw-control__handle--dragging {
   cursor: grabbing;
   background: rgba(255, 255, 255, 0.18);
+}
+
+.virtual-draw-control--dragging {
+  cursor: grabbing;
 }
 
 .virtual-draw-control__action {
@@ -1277,7 +1443,7 @@ body {
     min-width: 220px;
     min-height: 220px;
     padding: 20px;
-    border-radius: 20px;
+    border-radius: 0;
     margin: 0 auto;
   }
 
@@ -1297,6 +1463,7 @@ body {
     height: max(220px, min(560px, calc(100vh - (120px + var(--footer-safe-area)))));
     padding: 18px;
     margin: 0 auto;
+    border-radius: 0;
   }
 
   .status-hud {
