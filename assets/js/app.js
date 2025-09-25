@@ -3,6 +3,10 @@ const previewCanvas = document.getElementById('previewCanvas');
 const previewWindow = document.getElementById('previewWindow');
 const previewHandle = document.getElementById('previewHandle');
 const canvasStage = document.getElementById('canvasStage');
+let selectionOutlineCanvas = null;
+let selectionOutlineCtx = null;
+let selectionContentCanvas = null;
+let selectionContentCtx = null;
 const pixelSizeInput = document.getElementById('pixelSize');
 const widthInput = document.getElementById('canvasWidth');
 const heightInput = document.getElementById('canvasHeight');
@@ -13,6 +17,10 @@ const palettePanel = document.getElementById('palettePanel');
 const resizeCanvasButton = document.getElementById('resizeCanvas');
 const clearCanvasButton = document.getElementById('clearCanvas');
 const toolButtons = Array.from(document.querySelectorAll('.tool-button[data-tool]'));
+const selectionToolToggle = document.querySelector('[data-toggle="selectionTools"]');
+const selectionToolPanel = document.getElementById('selectionToolPanel');
+const selectionToolToggleIcon = document.getElementById('selectionToolToggleIcon');
+const selectionToolIds = ['selectRect', 'selectLasso', 'selectMagic'];
 const panelOverlay = document.getElementById('panelOverlay');
 const floatingPanels = Array.from(document.querySelectorAll('.floating-panel'));
 const panelToggleButtons = Array.from(document.querySelectorAll('[data-panel-target]'));
@@ -152,6 +160,7 @@ const virtualCursorState = {
   dragPointerId: null,
   dragOffsetX: 0,
   dragOffsetY: 0,
+  dragCaptureTarget: null,
   controlLeft: null,
   controlTop: null,
   lastClientX: null,
@@ -166,6 +175,36 @@ let virtualCursorElement = null;
 let virtualDrawControl = null;
 let virtualDrawHandle = null;
 let virtualDrawActionButton = null;
+
+const selectionState = {
+  active: false,
+  mask: null,
+  bounds: null,
+  mode: null,
+  isDragging: false,
+  pointerId: null,
+  dragStart: null,
+  dragCurrent: null,
+  lassoPoints: [],
+  captureTarget: null,
+  isMoving: false,
+  moveStart: null,
+  moveOffsetX: 0,
+  moveOffsetY: 0,
+  moveCanvas: null,
+  moveLayerId: null,
+  moveInitialBounds: null,
+};
+
+const SELECTION_OUTLINE_THICKNESS_PX = 2;
+const SELECTION_DASH_LENGTH_PX = 4;
+const SELECTION_DASH_SPEED_PX = 15;
+const SELECTION_COLOR_LIGHT = '#ffffff';
+const SELECTION_COLOR_DARK = '#000000';
+let selectionAnimationFrame = null;
+let selectionAnimationLastTime = null;
+let selectionDashPhasePx = 0;
+let selectionToolPanelOpen = false;
 
 let activeSwatch = null;
 let isDrawing = false;
@@ -185,6 +224,15 @@ let pinchStartDistance = null;
 let pinchStartZoom = 1;
 let userAdjustedZoom = false;
 let pinchActive = false;
+let pinchLastFocus = null;
+const panState = {
+  active: false,
+  pointerId: null,
+  lastClientX: 0,
+  lastClientY: 0,
+  captureTarget: null,
+};
+let spaceKeyPressed = false;
 const layerDragState = {
   draggingId: null,
   dropBeforeId: null,
@@ -1170,6 +1218,7 @@ function applyCanvasDisplaySize() {
     canvasStage.style.height = `${displayHeight}px`;
     canvasStage.style.setProperty('--pixel-cell', `${state.pixelSize}px`);
   }
+  updateSelectionCanvasSize();
   clampOffsets();
   applyCanvasZoom();
   updateVirtualCursorVisualPosition();
@@ -1183,6 +1232,917 @@ function applyCanvasZoom() {
   canvasStage.style.setProperty('--canvas-offset-x', `${state.offsetX}px`);
   canvasStage.style.setProperty('--canvas-offset-y', `${state.offsetY}px`);
   updateVirtualCursorVisualPosition();
+}
+
+function initSelectionOverlay() {
+  if (!canvasStage) {
+    return;
+  }
+  const displayWidth = Math.max(1, state.width * state.pixelSize);
+  const displayHeight = Math.max(1, state.height * state.pixelSize);
+
+  const ensureCanvas = (existingCanvas, className) => {
+    if (existingCanvas && existingCanvas.parentElement !== canvasStage) {
+      existingCanvas.remove();
+      existingCanvas = null;
+    }
+    if (!existingCanvas) {
+      const canvas = document.createElement('canvas');
+      canvas.className = className;
+      canvas.setAttribute('aria-hidden', 'true');
+      canvas.style.pointerEvents = 'none';
+      canvasStage.appendChild(canvas);
+      return canvas;
+    }
+    return existingCanvas;
+  };
+
+  selectionContentCanvas = ensureCanvas(selectionContentCanvas, 'selection-canvas selection-canvas--content');
+  selectionOutlineCanvas = ensureCanvas(selectionOutlineCanvas, 'selection-canvas selection-canvas--outline');
+
+  const resizeCanvas = (canvas, ctxRefSetter) => {
+    if (!canvas) {
+      ctxRefSetter(null);
+      return;
+    }
+    canvas.width = displayWidth;
+    canvas.height = displayHeight;
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = `${displayHeight}px`;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.imageSmoothingEnabled = false;
+    }
+    ctxRefSetter(ctx);
+  };
+
+  resizeCanvas(selectionContentCanvas, (ctx) => {
+    selectionContentCtx = ctx;
+  });
+  resizeCanvas(selectionOutlineCanvas, (ctx) => {
+    selectionOutlineCtx = ctx;
+  });
+
+  canvasStage.appendChild(selectionContentCanvas);
+  canvasStage.appendChild(selectionOutlineCanvas);
+
+  renderSelectionOverlay();
+  refreshSelectionContentPreview();
+}
+
+function updateSelectionCanvasSize() {
+  initSelectionOverlay();
+}
+
+function releaseSelectionCapture() {
+  if (
+    selectionState.captureTarget &&
+    selectionState.pointerId !== null &&
+    typeof selectionState.captureTarget.releasePointerCapture === 'function'
+  ) {
+    try {
+      selectionState.captureTarget.releasePointerCapture(selectionState.pointerId);
+    } catch (_) {
+      // ignore
+    }
+  }
+  selectionState.captureTarget = null;
+  selectionState.pointerId = null;
+}
+
+function clearSelection(options = {}) {
+  const { silent = false } = options;
+  selectionState.active = false;
+  selectionState.mask = null;
+  selectionState.bounds = null;
+  selectionState.mode = null;
+  selectionState.isDragging = false;
+  selectionState.dragStart = null;
+  selectionState.dragCurrent = null;
+  selectionState.lassoPoints = [];
+  selectionState.isMoving = false;
+  selectionState.moveStart = null;
+  selectionState.moveOffsetX = 0;
+  selectionState.moveOffsetY = 0;
+  selectionState.moveCanvas = null;
+  selectionState.moveLayerId = null;
+  selectionState.moveInitialBounds = null;
+  releaseSelectionCapture();
+  stopSelectionAnimation();
+  clearSelectionContentCanvas();
+  if (!silent) {
+    renderSelectionOverlay();
+  }
+}
+
+function setSelectionMask(mask, bounds) {
+  selectionState.mask = mask;
+  selectionState.bounds = bounds;
+  selectionState.active = Boolean(mask && bounds);
+  renderSelectionOverlay();
+}
+
+function hasActiveSelection() {
+  return Boolean(
+    selectionState.active &&
+      selectionState.mask &&
+      selectionState.bounds &&
+      selectionState.bounds.minX !== undefined
+  );
+}
+
+function isPixelSelected(x, y) {
+  if (!hasActiveSelection()) {
+    return true;
+  }
+  const { minX, minY, maxX, maxY } = selectionState.bounds;
+  if (x < minX || x > maxX || y < minY || y > maxY) {
+    return false;
+  }
+  const index = y * state.width + x;
+  return selectionState.mask[index] === 1;
+}
+
+function drawSelectionMask() {
+  if (!selectionOutlineCtx || !selectionState.mask || !selectionState.bounds) {
+    return;
+  }
+  const { minX, minY, maxX, maxY } = selectionState.bounds;
+  const mask = selectionState.mask;
+  const offsetX = selectionState.isMoving ? selectionState.moveOffsetX : 0;
+  const offsetY = selectionState.isMoving ? selectionState.moveOffsetY : 0;
+  drawSelectionBorder(mask, minX, minY, maxX, maxY, offsetX, offsetY);
+}
+
+function drawSelectionBorder(mask, minX, minY, maxX, maxY, offsetX = 0, offsetY = 0) {
+  const width = state.width;
+  const height = state.height;
+  const pixelSize = state.pixelSize;
+  const thickness = getSelectionOutlineThickness();
+  const half = thickness / 2;
+  const segments = [];
+  const offsetPx = offsetX * pixelSize;
+  const offsetPy = offsetY * pixelSize;
+  const pushSegment = (x0, y0, x1, y1) => {
+    segments.push(x0 + offsetPx, y0 + offsetPy, x1 + offsetPx, y1 + offsetPy);
+  };
+  for (let y = minY; y <= maxY; y += 1) {
+    const rowOffset = y * width;
+    for (let x = minX; x <= maxX; x += 1) {
+      if (!mask[rowOffset + x]) {
+        continue;
+      }
+      const neighbors = [
+        { dx: -1, dy: 0 },
+        { dx: 1, dy: 0 },
+        { dx: 0, dy: -1 },
+        { dx: 0, dy: 1 },
+      ];
+      let hasEdge = false;
+      for (const { dx, dy } of neighbors) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height || !mask[ny * width + nx]) {
+          hasEdge = true;
+          break;
+        }
+      }
+      if (!hasEdge) {
+        continue;
+      }
+      const leftEmpty = x === 0 || !mask[rowOffset + x - 1];
+      const rightEmpty = x === width - 1 || !mask[rowOffset + x + 1];
+      const upEmpty = y === 0 || !mask[(y - 1) * width + x];
+      const downEmpty = y === height - 1 || !mask[(y + 1) * width + x];
+      if (leftEmpty) {
+        const pxX = x * pixelSize + half;
+        const top = y * pixelSize + half;
+        const bottom = (y + 1) * pixelSize - half;
+        pushSegment(pxX, top, pxX, bottom);
+      }
+      if (rightEmpty) {
+        const pxX = (x + 1) * pixelSize - half;
+        const top = y * pixelSize + half;
+        const bottom = (y + 1) * pixelSize - half;
+        pushSegment(pxX, top, pxX, bottom);
+      }
+      if (upEmpty) {
+        const pxY = y * pixelSize + half;
+        const left = x * pixelSize + half;
+        const right = (x + 1) * pixelSize - half;
+        pushSegment(left, pxY, right, pxY);
+      }
+      if (downEmpty) {
+        const pxY = (y + 1) * pixelSize - half;
+        const left = x * pixelSize + half;
+        const right = (x + 1) * pixelSize - half;
+        pushSegment(left, pxY, right, pxY);
+      }
+    }
+  }
+  strokeSelectionSegments(segments);
+}
+
+function strokeSelectionSegments(segments) {
+  if (!selectionOutlineCtx) {
+    return;
+  }
+  if (!segments.length) {
+    return;
+  }
+  strokeSelectionPath(() => {
+    selectionOutlineCtx.beginPath();
+    for (let index = 0; index < segments.length; index += 4) {
+      selectionOutlineCtx.moveTo(segments[index], segments[index + 1]);
+      selectionOutlineCtx.lineTo(segments[index + 2], segments[index + 3]);
+    }
+  }, 'miter', 'square');
+}
+
+function filterMaskToActiveLayer(mask, bounds) {
+  const layer = getActiveLayer();
+  if (!layer) {
+    return null;
+  }
+  const { width, height } = state;
+  let imageData;
+  try {
+    imageData = layer.ctx.getImageData(0, 0, width, height).data;
+  } catch (error) {
+    console.warn('レイヤー内容の抽出に失敗しました', error);
+    return null;
+  }
+  let minX = width - 1;
+  let minY = height - 1;
+  let maxX = 0;
+  let maxY = 0;
+  let hasSelection = false;
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    const rowOffset = y * width;
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      const index = rowOffset + x;
+      if (!mask[index]) {
+        continue;
+      }
+      const alpha = imageData[index * 4 + 3];
+      if (alpha === 0) {
+        mask[index] = 0;
+        continue;
+      }
+      hasSelection = true;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (!hasSelection) {
+    return null;
+  }
+  return {
+    mask,
+    bounds: {
+      minX,
+      minY,
+      maxX,
+      maxY,
+    },
+  };
+}
+
+function clearSelectionContentCanvas() {
+  if (!selectionContentCtx || !selectionContentCanvas) {
+    return;
+  }
+  selectionContentCtx.clearRect(0, 0, selectionContentCanvas.width, selectionContentCanvas.height);
+}
+
+function drawSelectionContentPreview(offsetX = 0, offsetY = 0) {
+  if (!selectionContentCtx || !selectionState.moveCanvas || !selectionState.moveInitialBounds) {
+    clearSelectionContentCanvas();
+    return;
+  }
+  const pixelSize = state.pixelSize;
+  const { minX, minY } = selectionState.moveInitialBounds;
+  const destX = (minX + offsetX) * pixelSize;
+  const destY = (minY + offsetY) * pixelSize;
+  clearSelectionContentCanvas();
+  selectionContentCtx.drawImage(
+    selectionState.moveCanvas,
+    destX,
+    destY,
+    selectionState.moveCanvas.width * pixelSize,
+    selectionState.moveCanvas.height * pixelSize,
+  );
+}
+
+function refreshSelectionContentPreview() {
+  if (selectionState.isMoving) {
+    drawSelectionContentPreview(selectionState.moveOffsetX, selectionState.moveOffsetY);
+  } else {
+    clearSelectionContentCanvas();
+  }
+}
+
+function clampSelectionOffset(offsetX, offsetY) {
+  const bounds = selectionState.moveInitialBounds || selectionState.bounds;
+  if (!bounds) {
+    return { x: 0, y: 0 };
+  }
+  const minOffsetX = -bounds.minX;
+  const maxOffsetX = state.width - 1 - bounds.maxX;
+  const minOffsetY = -bounds.minY;
+  const maxOffsetY = state.height - 1 - bounds.maxY;
+  return {
+    x: clamp(offsetX, minOffsetX, maxOffsetX),
+    y: clamp(offsetY, minOffsetY, maxOffsetY),
+  };
+}
+
+function beginSelectionMove(x, y, pointerId, target) {
+  if (!hasActiveSelection() || selectionState.isMoving) {
+    return false;
+  }
+  const layer = getActiveLayer();
+  if (!layer) {
+    return false;
+  }
+  const { minX, minY, maxX, maxY } = selectionState.bounds || {};
+  if (
+    typeof minX !== 'number' ||
+    typeof minY !== 'number' ||
+    typeof maxX !== 'number' ||
+    typeof maxY !== 'number'
+  ) {
+    return false;
+  }
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  let imageData;
+  try {
+    imageData = layer.ctx.getImageData(minX, minY, width, height);
+  } catch (error) {
+    console.warn('選択範囲の画像取得に失敗しました', error);
+    return false;
+  }
+  const mask = selectionState.mask;
+  if (!mask) {
+    return false;
+  }
+  const canvasWidth = state.width;
+  const data = imageData.data;
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      const globalIndex = (minY + row) * canvasWidth + (minX + col);
+      if (mask[globalIndex]) {
+        continue;
+      }
+      const pixelIndex = (row * width + col) * 4;
+      data[pixelIndex] = 0;
+      data[pixelIndex + 1] = 0;
+      data[pixelIndex + 2] = 0;
+      data[pixelIndex + 3] = 0;
+    }
+  }
+
+  const { canvas: moveCanvas, ctx: moveCtx } = createOffscreenCanvas(width, height);
+  moveCtx.putImageData(imageData, 0, 0);
+
+  autoCompactAllDocks();
+
+  for (let row = minY; row <= maxY; row += 1) {
+    const rowOffset = row * canvasWidth;
+    for (let col = minX; col <= maxX; col += 1) {
+      if (mask[rowOffset + col]) {
+        layer.ctx.clearRect(col, row, 1, 1);
+      }
+    }
+  }
+
+  markHistoryDirty();
+  compositeLayers();
+
+  selectionState.isMoving = true;
+  selectionState.moveStart = { x, y };
+  selectionState.moveOffsetX = 0;
+  selectionState.moveOffsetY = 0;
+  selectionState.moveCanvas = moveCanvas;
+  selectionState.moveLayerId = layer.id;
+  selectionState.moveInitialBounds = { minX, minY, maxX, maxY };
+  selectionState.pointerId = pointerId;
+  selectionState.captureTarget = target;
+
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(pointerId);
+    } catch (_) {
+      selectionState.captureTarget = null;
+    }
+  }
+
+  refreshSelectionContentPreview();
+  renderSelectionOverlay();
+  return true;
+}
+
+function updateSelectionMove(x, y) {
+  if (!selectionState.isMoving || !selectionState.moveStart) {
+    return;
+  }
+  const rawOffsetX = x - selectionState.moveStart.x;
+  const rawOffsetY = y - selectionState.moveStart.y;
+  const { x: offsetX, y: offsetY } = clampSelectionOffset(rawOffsetX, rawOffsetY);
+  if (offsetX === selectionState.moveOffsetX && offsetY === selectionState.moveOffsetY) {
+    return;
+  }
+  selectionState.moveOffsetX = offsetX;
+  selectionState.moveOffsetY = offsetY;
+  refreshSelectionContentPreview();
+  renderSelectionOverlay();
+}
+
+function finalizeSelectionMove() {
+  if (!selectionState.isMoving) {
+    return;
+  }
+  const layerId = selectionState.moveLayerId;
+  let targetLayer = null;
+  if (layerId) {
+    const index = getLayerIndex(layerId);
+    if (index !== -1) {
+      targetLayer = layersState.layers[index];
+    }
+  }
+  if (!targetLayer) {
+    targetLayer = getActiveLayer();
+  }
+  if (!targetLayer) {
+    selectionState.isMoving = false;
+    selectionState.moveCanvas = null;
+    refreshSelectionContentPreview();
+    releaseSelectionCapture();
+    return;
+  }
+
+  const offsetX = selectionState.moveOffsetX;
+  const offsetY = selectionState.moveOffsetY;
+  const bounds = selectionState.moveInitialBounds || selectionState.bounds;
+  if (bounds && selectionState.moveCanvas) {
+    const destX = bounds.minX + offsetX;
+    const destY = bounds.minY + offsetY;
+    targetLayer.ctx.drawImage(selectionState.moveCanvas, destX, destY);
+  }
+
+  selectionState.isMoving = false;
+  selectionState.moveStart = null;
+  selectionState.moveCanvas = null;
+  selectionState.moveLayerId = null;
+
+  if (bounds && (offsetX !== 0 || offsetY !== 0)) {
+    const width = state.width;
+    const height = state.height;
+    const newMask = new Uint8Array(width * height);
+    const mask = selectionState.mask;
+    for (let row = bounds.minY; row <= bounds.maxY; row += 1) {
+      for (let col = bounds.minX; col <= bounds.maxX; col += 1) {
+        const sourceIndex = row * width + col;
+        if (!mask || !mask[sourceIndex]) {
+          continue;
+        }
+        const newX = col + offsetX;
+        const newY = row + offsetY;
+        if (newX < 0 || newX >= width || newY < 0 || newY >= height) {
+          continue;
+        }
+        newMask[newY * width + newX] = 1;
+      }
+    }
+    selectionState.mask = newMask;
+    selectionState.bounds = {
+      minX: bounds.minX + offsetX,
+      minY: bounds.minY + offsetY,
+      maxX: bounds.maxX + offsetX,
+      maxY: bounds.maxY + offsetY,
+    };
+  }
+
+  selectionState.moveOffsetX = 0;
+  selectionState.moveOffsetY = 0;
+  selectionState.moveInitialBounds = null;
+
+  refreshSelectionContentPreview();
+  releaseSelectionCapture();
+  compositeLayers();
+  renderSelectionOverlay();
+  finalizeHistoryEntry();
+}
+
+function strokeSelectionPath(drawPath, lineJoin = 'miter', lineCap = 'square') {
+  if (!selectionOutlineCtx) {
+    return;
+  }
+  const thickness = getSelectionOutlineThickness();
+  const dashLength = getSelectionDashLength();
+  const dashPattern = [dashLength, dashLength];
+  const dashPhase = selectionDashPhasePx % (dashPattern[0] + dashPattern[1]);
+
+  selectionOutlineCtx.save();
+  selectionOutlineCtx.lineWidth = thickness;
+  selectionOutlineCtx.lineCap = lineCap;
+  selectionOutlineCtx.lineJoin = lineJoin;
+  selectionOutlineCtx.setLineDash(dashPattern);
+
+  selectionOutlineCtx.lineDashOffset = -dashPhase;
+  selectionOutlineCtx.strokeStyle = SELECTION_COLOR_LIGHT;
+  drawPath();
+  selectionOutlineCtx.stroke();
+
+  selectionOutlineCtx.lineDashOffset = -(dashPhase + dashLength);
+  selectionOutlineCtx.strokeStyle = SELECTION_COLOR_DARK;
+  drawPath();
+  selectionOutlineCtx.stroke();
+
+  selectionOutlineCtx.setLineDash([]);
+  selectionOutlineCtx.lineDashOffset = 0;
+  selectionOutlineCtx.restore();
+}
+
+function getSelectionOutlineThickness() {
+  return SELECTION_OUTLINE_THICKNESS_PX;
+}
+
+function getSelectionDashLength() {
+  return SELECTION_DASH_LENGTH_PX;
+}
+
+function drawRectSelectionPreview() {
+  if (!selectionOutlineCtx || !selectionState.dragStart || !selectionState.dragCurrent) {
+    return;
+  }
+  const start = selectionState.dragStart;
+  const current = selectionState.dragCurrent;
+  const minX = Math.min(start.x, current.x);
+  const maxX = Math.max(start.x, current.x);
+  const minY = Math.min(start.y, current.y);
+  const maxY = Math.max(start.y, current.y);
+  const pixelSize = state.pixelSize;
+  const thickness = getSelectionOutlineThickness();
+  const half = thickness / 2;
+  const left = minX * pixelSize + half;
+  const right = (maxX + 1) * pixelSize - half;
+  const top = minY * pixelSize + half;
+  const bottom = (maxY + 1) * pixelSize - half;
+  const segments = [
+    left, top, right, top,
+    left, bottom, right, bottom,
+    left, top, left, bottom,
+    right, top, right, bottom,
+  ];
+  strokeSelectionSegments(segments);
+}
+
+function drawLassoSelectionPreview() {
+  if (!selectionOutlineCtx || selectionState.lassoPoints.length < 2) {
+    return;
+  }
+  const points = selectionState.lassoPoints;
+  const px = state.pixelSize;
+  const drawOutlinePath = () => {
+    selectionOutlineCtx.beginPath();
+    selectionOutlineCtx.moveTo(points[0].x * px, points[0].y * px);
+    for (let i = 1; i < points.length; i += 1) {
+      selectionOutlineCtx.lineTo(points[i].x * px, points[i].y * px);
+    }
+    const lastPoint = points[points.length - 1];
+    if (lastPoint.x !== points[0].x || lastPoint.y !== points[0].y) {
+      selectionOutlineCtx.lineTo(points[0].x * px, points[0].y * px);
+    }
+  };
+
+  strokeSelectionPath(drawOutlinePath, 'round', 'round');
+}
+
+function renderSelectionOverlay() {
+  if (!selectionOutlineCtx) {
+    initSelectionOverlay();
+  }
+  if (!selectionOutlineCtx) {
+    return;
+  }
+  const displayWidth = state.width * state.pixelSize;
+  const displayHeight = state.height * state.pixelSize;
+  selectionOutlineCtx.clearRect(0, 0, displayWidth, displayHeight);
+  if (selectionState.active) {
+    drawSelectionMask();
+  }
+  if (selectionState.isDragging) {
+    if (selectionState.mode === 'selectRect') {
+      drawRectSelectionPreview();
+    } else if (selectionState.mode === 'selectLasso') {
+      drawLassoSelectionPreview();
+    }
+  }
+  const needsAnimation = selectionState.active || selectionState.isDragging;
+  if (needsAnimation) {
+    ensureSelectionAnimation();
+  } else {
+    stopSelectionAnimation();
+  }
+}
+
+function ensureSelectionAnimation() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  if (selectionAnimationFrame !== null) {
+    return;
+  }
+  selectionAnimationLastTime = null;
+  selectionAnimationFrame = window.requestAnimationFrame(animateSelectionBorder);
+}
+
+function stopSelectionAnimation() {
+  if (typeof window !== 'undefined' && selectionAnimationFrame !== null) {
+    window.cancelAnimationFrame(selectionAnimationFrame);
+  }
+  selectionAnimationFrame = null;
+  selectionAnimationLastTime = null;
+  selectionDashPhasePx = 0;
+}
+
+function animateSelectionBorder(timestamp) {
+  if (!selectionState.active && !selectionState.isDragging) {
+    selectionAnimationFrame = null;
+    selectionAnimationLastTime = null;
+    renderSelectionOverlay();
+    return;
+  }
+  if (selectionAnimationLastTime !== null) {
+    const deltaMs = Math.max(0, timestamp - selectionAnimationLastTime);
+    const delta = (deltaMs / 1000) * SELECTION_DASH_SPEED_PX;
+    selectionDashPhasePx = (selectionDashPhasePx + delta) % (SELECTION_DASH_LENGTH_PX * 2);
+  }
+  selectionAnimationLastTime = timestamp;
+  renderSelectionOverlay();
+  if (typeof window !== 'undefined') {
+    selectionAnimationFrame = window.requestAnimationFrame(animateSelectionBorder);
+  }
+}
+
+function clampToCanvas(value, max) {
+  return clamp(value, 0, max);
+}
+
+function beginRectSelection(x, y, pointerId, target) {
+  clearSelection({ silent: true });
+  autoCompactAllDocks();
+  selectionState.mode = 'selectRect';
+  selectionState.isDragging = true;
+  selectionState.dragStart = {
+    x: clampToCanvas(x, state.width - 1),
+    y: clampToCanvas(y, state.height - 1),
+  };
+  selectionState.dragCurrent = { ...selectionState.dragStart };
+  selectionState.pointerId = pointerId;
+  selectionState.captureTarget = target;
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(pointerId);
+    } catch (_) {
+      selectionState.captureTarget = null;
+    }
+  }
+  updateCursorInfo(selectionState.dragStart.x, selectionState.dragStart.y);
+  renderSelectionOverlay();
+}
+
+function updateRectSelection(x, y) {
+  if (!selectionState.isDragging || selectionState.mode !== 'selectRect') {
+    return;
+  }
+  selectionState.dragCurrent = {
+    x: clampToCanvas(x, state.width - 1),
+    y: clampToCanvas(y, state.height - 1),
+  };
+  renderSelectionOverlay();
+}
+
+function finalizeRectSelection() {
+  if (!selectionState.isDragging || selectionState.mode !== 'selectRect' || !selectionState.dragStart || !selectionState.dragCurrent) {
+    clearSelection();
+    return;
+  }
+  const start = selectionState.dragStart;
+  const current = selectionState.dragCurrent;
+  const minX = Math.min(start.x, current.x);
+  const maxX = Math.max(start.x, current.x);
+  const minY = Math.min(start.y, current.y);
+  const maxY = Math.max(start.y, current.y);
+  const width = state.width;
+  const mask = new Uint8Array(width * state.height);
+  for (let y = minY; y <= maxY; y += 1) {
+    const rowOffset = y * width;
+    for (let x = minX; x <= maxX; x += 1) {
+      mask[rowOffset + x] = 1;
+    }
+  }
+  selectionState.isDragging = false;
+  selectionState.dragStart = null;
+  selectionState.dragCurrent = null;
+  selectionState.lassoPoints = [];
+  releaseSelectionCapture();
+  setSelectionMask(mask, { minX, minY, maxX, maxY });
+  selectionState.mode = 'selectRect';
+}
+
+function beginLassoSelection(canvasX, canvasY, pointerId, target) {
+  clearSelection({ silent: true });
+  autoCompactAllDocks();
+  selectionState.mode = 'selectLasso';
+  selectionState.isDragging = true;
+  const clampedX = clamp(canvasX, 0, state.width);
+  const clampedY = clamp(canvasY, 0, state.height);
+  selectionState.lassoPoints = [{ x: clampedX, y: clampedY }];
+  selectionState.pointerId = pointerId;
+  selectionState.captureTarget = target;
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(pointerId);
+    } catch (_) {
+      selectionState.captureTarget = null;
+    }
+  }
+  updateCursorInfo(Math.floor(clampedX), Math.floor(clampedY));
+  renderSelectionOverlay();
+}
+
+function updateLassoSelection(canvasX, canvasY) {
+  if (!selectionState.isDragging || selectionState.mode !== 'selectLasso') {
+    return;
+  }
+  const clampedX = clamp(canvasX, 0, state.width);
+  const clampedY = clamp(canvasY, 0, state.height);
+  const points = selectionState.lassoPoints;
+  const lastPoint = points[points.length - 1];
+  const dx = clampedX - lastPoint.x;
+  const dy = clampedY - lastPoint.y;
+  if (Math.hypot(dx, dy) >= 0.25) {
+    points.push({ x: clampedX, y: clampedY });
+    renderSelectionOverlay();
+  }
+}
+
+function pointInPolygon(px, py, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi || 1e-6) + xi;
+    if (intersect) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function finalizeLassoSelection() {
+  if (!selectionState.isDragging || selectionState.mode !== 'selectLasso' || selectionState.lassoPoints.length < 3) {
+    clearSelection();
+    return;
+  }
+  const polygon = [...selectionState.lassoPoints];
+  const firstPoint = polygon[0];
+  const lastPoint = polygon[polygon.length - 1];
+  if (Math.hypot(firstPoint.x - lastPoint.x, firstPoint.y - lastPoint.y) > 0.1) {
+    polygon.push({ ...firstPoint });
+  }
+  const width = state.width;
+  const height = state.height;
+  const mask = new Uint8Array(width * height);
+  let minX = width - 1;
+  let minY = height - 1;
+  let maxX = 0;
+  let maxY = 0;
+  let hasSelection = false;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const centerX = x + 0.5;
+      const centerY = y + 0.5;
+      if (pointInPolygon(centerX, centerY, polygon)) {
+        const idx = y * width + x;
+        mask[idx] = 1;
+        hasSelection = true;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  selectionState.isDragging = false;
+  releaseSelectionCapture();
+  if (!hasSelection) {
+    clearSelection();
+    return;
+  }
+  const filtered = filterMaskToActiveLayer(mask, { minX, minY, maxX, maxY });
+  if (!filtered) {
+    clearSelection();
+    return;
+  }
+  selectionState.lassoPoints = polygon;
+  setSelectionMask(filtered.mask, filtered.bounds);
+  selectionState.mode = 'selectLasso';
+}
+
+function finalizeSelectionDrag() {
+  if (!selectionState.isDragging) {
+    return false;
+  }
+  if (selectionState.mode === 'selectRect') {
+    finalizeRectSelection();
+  } else if (selectionState.mode === 'selectLasso') {
+    finalizeLassoSelection();
+  } else {
+    selectionState.isDragging = false;
+    releaseSelectionCapture();
+  }
+  return true;
+}
+
+function performMagicSelection(x, y) {
+  const width = state.width;
+  const height = state.height;
+  if (x < 0 || x >= width || y < 0 || y >= height) {
+    clearSelection();
+    return;
+  }
+  const layer = getActiveLayer();
+  if (!layer) {
+    clearSelection();
+    return;
+  }
+  let data;
+  try {
+    data = layer.ctx.getImageData(0, 0, width, height).data;
+  } catch (error) {
+    console.warn('レイヤー内容の取得に失敗しました', error);
+    clearSelection();
+    return;
+  }
+  clearSelection({ silent: true });
+  autoCompactAllDocks();
+  const pixels = new Uint32Array(data.buffer);
+  const targetIndex = y * width + x;
+  if (data[targetIndex * 4 + 3] === 0) {
+    clearSelection();
+    return;
+  }
+  const targetColor = pixels[targetIndex];
+  const mask = new Uint8Array(width * height);
+  const stack = [[x, y]];
+  let minX = width - 1;
+  let minY = height - 1;
+  let maxX = 0;
+  let maxY = 0;
+  let hasSelection = false;
+  while (stack.length > 0) {
+    const [cx, cy] = stack.pop();
+    if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
+      continue;
+    }
+    const index = cy * width + cx;
+    if (mask[index] || pixels[index] !== targetColor || data[index * 4 + 3] === 0) {
+      continue;
+    }
+    mask[index] = 1;
+    hasSelection = true;
+    if (cx < minX) minX = cx;
+    if (cy < minY) minY = cy;
+    if (cx > maxX) maxX = cx;
+    if (cy > maxY) maxY = cy;
+    stack.push([cx + 1, cy]);
+    stack.push([cx - 1, cy]);
+    stack.push([cx, cy + 1]);
+    stack.push([cx, cy - 1]);
+  }
+  if (!hasSelection) {
+    clearSelection();
+    return;
+  }
+  selectionState.mode = 'selectMagic';
+  selectionState.isDragging = false;
+  selectionState.lassoPoints = [];
+  selectionState.dragStart = null;
+  selectionState.dragCurrent = null;
+  const filtered = filterMaskToActiveLayer(mask, { minX, minY, maxX, maxY });
+  if (!filtered) {
+    clearSelection();
+    return;
+  }
+  setSelectionMask(filtered.mask, filtered.bounds);
 }
 
 function getOffsetBounds(wrapperSize, scaledSize) {
@@ -1371,20 +2331,27 @@ function setVirtualControlPosition(left, top) {
   virtualCursorState.controlTop = clampedTop;
 }
 
-function endVirtualDrag() {
-  if (!virtualDrawHandle) {
+function endVirtualDrag(event) {
+  if (!virtualDrawControl || !virtualCursorState.dragging) {
     return;
   }
-  if (virtualCursorState.dragPointerId !== null) {
+  if (event && virtualCursorState.dragPointerId !== null && event.pointerId !== virtualCursorState.dragPointerId) {
+    return;
+  }
+  const captureTarget = virtualCursorState.dragCaptureTarget;
+  if (virtualCursorState.dragPointerId !== null && captureTarget && typeof captureTarget.releasePointerCapture === 'function') {
     try {
-      virtualDrawHandle.releasePointerCapture(virtualCursorState.dragPointerId);
+      captureTarget.releasePointerCapture(virtualCursorState.dragPointerId);
     } catch (_) {
       // noop
     }
   }
   virtualCursorState.dragging = false;
   virtualCursorState.dragPointerId = null;
-  virtualDrawHandle.classList.remove('virtual-draw-control__handle--dragging');
+  virtualCursorState.dragCaptureTarget = null;
+  virtualDrawHandle?.classList.remove('virtual-draw-control__handle--dragging');
+  virtualDrawControl.classList.remove('virtual-draw-control--dragging');
+  virtualDrawControl.style.zIndex = '';
 }
 
 function endVirtualDrawing() {
@@ -1534,7 +2501,7 @@ function initVirtualCursorUI() {
   virtualDrawHandle.type = 'button';
   virtualDrawHandle.className = 'virtual-draw-control__handle';
   virtualDrawHandle.setAttribute('aria-label', '仮想カーソルボタンを移動');
-  virtualDrawHandle.innerHTML = '<span aria-hidden="true">⋮⋮</span>';
+  virtualDrawHandle.innerHTML = '<span class="mini-dock__drag-line" aria-hidden="true"></span>';
 
   virtualDrawActionButton = document.createElement('button');
   virtualDrawActionButton.type = 'button';
@@ -1547,30 +2514,71 @@ function initVirtualCursorUI() {
   const host = document.querySelector('.app-stage') || document.body;
   host.appendChild(virtualDrawControl);
 
-  virtualDrawHandle.addEventListener('pointerdown', (event) => {
-    event.preventDefault();
-    virtualCursorState.dragging = true;
-    virtualCursorState.dragPointerId = event.pointerId;
-    const rect = virtualDrawControl.getBoundingClientRect();
-    virtualCursorState.dragOffsetX = event.clientX - rect.left;
-    virtualCursorState.dragOffsetY = event.clientY - rect.top;
-    virtualDrawHandle.classList.add('virtual-draw-control__handle--dragging');
-    try {
-      virtualDrawHandle.setPointerCapture(event.pointerId);
-    } catch (_) {
-      // noop
-    }
-  });
-
-  virtualDrawHandle.addEventListener('pointermove', (event) => {
+  const handleVirtualControlPointerMove = (event) => {
     if (!virtualCursorState.dragging || event.pointerId !== virtualCursorState.dragPointerId) {
       return;
     }
+    event.preventDefault();
     setVirtualControlPosition(event.clientX - virtualCursorState.dragOffsetX, event.clientY - virtualCursorState.dragOffsetY);
-  });
+  };
 
+  const beginVirtualControlDrag = (event, captureTarget = virtualDrawHandle) => {
+    if (virtualCursorState.dragging) {
+      return;
+    }
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const rect = virtualDrawControl.getBoundingClientRect();
+    virtualCursorState.dragging = true;
+    virtualCursorState.dragPointerId = event.pointerId;
+    virtualCursorState.dragOffsetX = event.clientX - rect.left;
+    virtualCursorState.dragOffsetY = event.clientY - rect.top;
+    virtualCursorState.dragCaptureTarget = captureTarget || virtualDrawHandle;
+    virtualDrawHandle.classList.add('virtual-draw-control__handle--dragging');
+    virtualDrawControl.classList.add('virtual-draw-control--dragging');
+    virtualDrawControl.style.zIndex = '260';
+    try {
+      if (virtualCursorState.dragCaptureTarget && typeof virtualCursorState.dragCaptureTarget.setPointerCapture === 'function') {
+        virtualCursorState.dragCaptureTarget.setPointerCapture(event.pointerId);
+      }
+    } catch (_) {
+      // noop
+    }
+  };
+
+  const handleVirtualPointerDown = (event) => {
+    if (virtualDrawActionButton && virtualDrawActionButton.contains(event.target)) {
+      return;
+    }
+    beginVirtualControlDrag(event, event.currentTarget);
+  };
+
+  virtualDrawHandle.addEventListener('pointerdown', handleVirtualPointerDown);
+  virtualDrawHandle.addEventListener('pointermove', handleVirtualControlPointerMove);
   virtualDrawHandle.addEventListener('pointerup', endVirtualDrag);
   virtualDrawHandle.addEventListener('pointercancel', endVirtualDrag);
+
+  virtualDrawControl.addEventListener('pointermove', handleVirtualControlPointerMove);
+  virtualDrawControl.addEventListener('pointerup', endVirtualDrag);
+  virtualDrawControl.addEventListener('pointercancel', endVirtualDrag);
+
+  virtualDrawControl.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
+    if (event.pointerType === 'mouse') {
+      return;
+    }
+    if (virtualDrawActionButton && virtualDrawActionButton.contains(event.target)) {
+      return;
+    }
+    if (virtualDrawHandle.contains(event.target)) {
+      return;
+    }
+    beginVirtualControlDrag(event, virtualDrawControl);
+  });
 
   virtualDrawActionButton.addEventListener('pointerdown', (event) => {
     if (!virtualCursorState.enabled) {
@@ -1624,6 +2632,199 @@ function clampOffsets() {
   const { min: minOffsetY, max: maxOffsetY } = getOffsetBounds(wrapperHeight, scaledHeight);
   state.offsetX = clamp(state.offsetX, minOffsetX, maxOffsetX);
   state.offsetY = clamp(state.offsetY, minOffsetY, maxOffsetY);
+}
+
+function updatePanCursorState() {
+  if (!canvasStage) {
+    return;
+  }
+  const panReady = state.tool === 'pan' || spaceKeyPressed;
+  if (panState.active || pinchActive) {
+    canvasStage.classList.add('canvas-stage--panning');
+    canvasStage.classList.remove('canvas-stage--pan-ready');
+    if (pixelCanvas) {
+      pixelCanvas.style.cursor = 'grabbing';
+    }
+  } else {
+    canvasStage.classList.remove('canvas-stage--panning');
+    if (panReady) {
+      canvasStage.classList.add('canvas-stage--pan-ready');
+      if (pixelCanvas) {
+        pixelCanvas.style.cursor = 'grab';
+      }
+    } else {
+      canvasStage.classList.remove('canvas-stage--pan-ready');
+      if (pixelCanvas) {
+        pixelCanvas.style.cursor = 'crosshair';
+      }
+    }
+  }
+}
+
+function panCanvasBy(deltaX, deltaY) {
+  if (!canvasStage) {
+    return;
+  }
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+    return;
+  }
+  if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) {
+    return;
+  }
+  state.offsetX += deltaX;
+  state.offsetY += deltaY;
+  clampOffsets();
+  applyCanvasZoom();
+}
+
+function shouldStartCanvasPan(event) {
+  if (!canvasStage) {
+    return false;
+  }
+  if (pinchActive || zoomPointers.size >= 2) {
+    return false;
+  }
+  if (state.tool === 'pan') {
+    if (event.pointerType === 'mouse') {
+      return event.button === 0;
+    }
+    if (event.pointerType === 'touch') {
+      return true;
+    }
+    if (event.pointerType === 'pen') {
+      return true;
+    }
+  }
+  if (event.pointerType === 'mouse') {
+    if (event.button === 1) {
+      return true;
+    }
+    if (event.button === 0 && spaceKeyPressed) {
+      return true;
+    }
+  }
+  if (event.pointerType === 'pen' && spaceKeyPressed) {
+    return true;
+  }
+  return false;
+}
+
+function beginCanvasPan(event) {
+  if (panState.active) {
+    return;
+  }
+  cancelActiveDrawing();
+  autoCompactAllDocks();
+  panState.active = true;
+  panState.pointerId = event.pointerId;
+  panState.lastClientX = event.clientX;
+  panState.lastClientY = event.clientY;
+  panState.captureTarget =
+    event.currentTarget && typeof event.currentTarget.setPointerCapture === 'function'
+      ? event.currentTarget
+      : null;
+  if (panState.captureTarget) {
+    try {
+      panState.captureTarget.setPointerCapture(event.pointerId);
+    } catch (_) {
+      panState.captureTarget = null;
+    }
+  }
+  activePointerId = null;
+  updatePanCursorState();
+}
+
+function updateCanvasPan(event) {
+  if (!panState.active || event.pointerId !== panState.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  const deltaX = event.clientX - panState.lastClientX;
+  const deltaY = event.clientY - panState.lastClientY;
+  panState.lastClientX = event.clientX;
+  panState.lastClientY = event.clientY;
+  panCanvasBy(deltaX, deltaY);
+}
+
+function endCanvasPan(event = null, { force = false } = {}) {
+  if (!panState.active) {
+    return false;
+  }
+  if (!force && event && event.pointerId !== panState.pointerId) {
+    return false;
+  }
+  if (panState.captureTarget && panState.pointerId !== null) {
+    try {
+      panState.captureTarget.releasePointerCapture(panState.pointerId);
+    } catch (_) {
+      // noop
+    }
+  }
+  panState.active = false;
+  panState.pointerId = null;
+  panState.captureTarget = null;
+  updatePanCursorState();
+  return true;
+}
+
+function isTypingTarget(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+  if (element.isContentEditable) {
+    return true;
+  }
+  if (element instanceof HTMLTextAreaElement) {
+    return true;
+  }
+  if (element instanceof HTMLInputElement) {
+    const type = element.type;
+    const blocked = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'reset', 'submit'];
+    return !blocked.includes(type);
+  }
+  return false;
+}
+
+function handleCanvasPanKeyDown(event) {
+  const isSpace = event.code === 'Space' || event.key === ' ';
+  if (!isSpace) {
+    return;
+  }
+  if (isTypingTarget(event.target)) {
+    return;
+  }
+  if (!spaceKeyPressed) {
+    spaceKeyPressed = true;
+    updatePanCursorState();
+  }
+  const activeElement = document.activeElement;
+  if (
+    activeElement &&
+    activeElement !== document.body &&
+    activeElement !== document.documentElement &&
+    !isTypingTarget(activeElement)
+  ) {
+    if (typeof activeElement.blur === 'function') {
+      activeElement.blur();
+    }
+  }
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function handleCanvasPanKeyUp(event) {
+  const isSpace = event.code === 'Space' || event.key === ' ';
+  if (!isSpace) {
+    return;
+  }
+  spaceKeyPressed = false;
+  updatePanCursorState();
+}
+
+function resetCanvasPanKeyState() {
+  spaceKeyPressed = false;
+  endCanvasPan(null, { force: true });
+  updatePanCursorState();
 }
 
 let lastExportMultiplier = 1;
@@ -1694,11 +2895,18 @@ function handleZoomPointerDown(event) {
   }
   zoomPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (zoomPointers.size === 2) {
+    if (panState.active) {
+      endCanvasPan(null, { force: true });
+    }
     pinchActive = true;
     cancelActiveDrawing();
     pinchStartDistance = getZoomPointerDistance();
     pinchStartZoom = state.zoom;
+    pinchLastFocus = getZoomPointerFocus();
+    updatePanCursorState();
     applyCanvasZoom();
+  } else if (zoomPointers.size > 0 && !pinchActive) {
+    pinchLastFocus = getZoomPointerFocus();
   }
 }
 
@@ -1707,14 +2915,26 @@ function handleZoomPointerMove(event) {
     return;
   }
   zoomPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (zoomPointers.size === 2 && pinchStartDistance) {
+  const focusWorld = getZoomPointerFocus();
+  if (zoomPointers.size >= 2) {
     event.preventDefault();
+    if (focusWorld) {
+      if (pinchLastFocus) {
+        panCanvasBy(focusWorld.x - pinchLastFocus.x, focusWorld.y - pinchLastFocus.y);
+      }
+      pinchLastFocus = focusWorld;
+    }
     const newDistance = getZoomPointerDistance();
+    if (!pinchStartDistance && newDistance > 0) {
+      pinchStartDistance = newDistance;
+      pinchStartZoom = state.zoom;
+    }
     if (newDistance > 0 && pinchStartDistance > 0) {
       const ratio = newDistance / pinchStartDistance;
-      const focusWorld = getZoomPointerFocus();
       setZoom(pinchStartZoom * ratio, { fromUser: true, focus: focusWorld });
     }
+  } else if (zoomPointers.size === 1) {
+    pinchLastFocus = focusWorld;
   }
 }
 
@@ -1723,19 +2943,29 @@ function handleZoomPointerUp(event) {
     zoomPointers.clear();
     pinchStartDistance = null;
     pinchActive = false;
+    pinchLastFocus = null;
     clampOffsets();
     applyCanvasZoom();
+    updatePanCursorState();
     return;
   }
   if (zoomPointers.has(event.pointerId)) {
     zoomPointers.delete(event.pointerId);
   }
-  if (zoomPointers.size < 2) {
+  if (zoomPointers.size >= 2) {
+    pinchStartDistance = getZoomPointerDistance();
+    pinchStartZoom = state.zoom;
+    pinchLastFocus = getZoomPointerFocus();
+    pinchActive = true;
+    updatePanCursorState();
+  } else {
     pinchStartDistance = null;
+    pinchLastFocus = zoomPointers.size === 1 ? getZoomPointerFocus() : null;
     if (pinchActive) {
       pinchActive = false;
       clampOffsets();
       applyCanvasZoom();
+      updatePanCursorState();
     }
   }
 }
@@ -1775,14 +3005,116 @@ function normalizeHex(hex) {
   return `#${value.slice(0, 6).toLowerCase()}`;
 }
 
+function isSelectionTool(tool) {
+  return selectionToolIds.includes(tool);
+}
+
+function getSelectionToolButton(tool) {
+  return toolButtons.find((button) => button.dataset.tool === tool);
+}
+
+function getSelectionToggleMeta(tool) {
+  const defaultLabel = selectionToolToggle?.dataset.defaultLabel || '範囲選択ツール';
+  const defaultIcon = selectionToolToggle?.dataset.defaultIcon || selectionToolToggleIcon?.src || '';
+  if (!isSelectionTool(tool)) {
+    return { icon: defaultIcon, label: defaultLabel };
+  }
+  const button = getSelectionToolButton(tool);
+  if (!button) {
+    return { icon: defaultIcon, label: defaultLabel };
+  }
+  const icon = button.dataset.icon || button.querySelector('img')?.src || defaultIcon;
+  const label =
+    button.getAttribute('aria-label') || button.querySelector('img')?.getAttribute('alt') || defaultLabel;
+  return { icon, label };
+}
+
+function updateSelectionToolToggleState() {
+  if (!selectionToolToggle) {
+    return;
+  }
+  const selectionActive = isSelectionTool(state.tool);
+  const displayTool = selectionActive
+    ? state.tool
+    : selectionToolToggle?.dataset.defaultTool || selectionToolIds[0];
+  const meta = getSelectionToggleMeta(displayTool);
+  if (selectionToolToggleIcon && meta.icon) {
+    selectionToolToggleIcon.src = meta.icon;
+  }
+  if (selectionToolToggleIcon && meta.label) {
+    selectionToolToggleIcon.alt = meta.label;
+  }
+  const toggleLabel = meta.label || selectionToolToggle?.dataset.defaultLabel || '範囲選択ツール';
+  selectionToolToggle.setAttribute('aria-label', toggleLabel);
+  selectionToolToggle.setAttribute('aria-pressed', selectionActive ? 'true' : 'false');
+  selectionToolToggle.setAttribute('aria-expanded', selectionToolPanelOpen ? 'true' : 'false');
+  selectionToolToggle.classList.toggle('tool-button--active', selectionActive || selectionToolPanelOpen);
+}
+
+function openSelectionToolPanel() {
+  if (!selectionToolPanel || selectionToolPanelOpen) {
+    return;
+  }
+  selectionToolPanel.hidden = false;
+  selectionToolPanel.setAttribute('aria-hidden', 'false');
+  selectionToolPanelOpen = true;
+  updateSelectionToolToggleState();
+}
+
+function closeSelectionToolPanel() {
+  if (!selectionToolPanelOpen) {
+    return;
+  }
+  if (selectionToolPanel) {
+    selectionToolPanel.hidden = true;
+    selectionToolPanel.setAttribute('aria-hidden', 'true');
+  }
+  selectionToolPanelOpen = false;
+  updateSelectionToolToggleState();
+}
+
+function toggleSelectionToolPanel() {
+  if (selectionToolPanelOpen) {
+    closeSelectionToolPanel();
+  } else {
+    openSelectionToolPanel();
+  }
+}
+
+function handleSelectionToolDocumentClick(event) {
+  if (!selectionToolPanelOpen) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    closeSelectionToolPanel();
+    return;
+  }
+  if (
+    (selectionToolPanel && selectionToolPanel.contains(target)) ||
+    (selectionToolToggle && selectionToolToggle.contains(target))
+  ) {
+    return;
+  }
+  closeSelectionToolPanel();
+}
+
 function setActiveTool(tool) {
+  if (tool !== 'pan') {
+    endCanvasPan(null, { force: true });
+  }
   state.tool = tool;
   toolButtons.forEach((button) => {
     const isActive = button.dataset.tool === tool;
     button.classList.toggle('tool-button--active', isActive);
     button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
+  if (!isSelectionTool(tool)) {
+    closeSelectionToolPanel();
+  }
+  updateSelectionToolToggleState();
   updateToolDockStatus();
+  updatePanCursorState();
   flashDock('toolDock');
   scheduleDockAutoHide();
 }
@@ -3569,23 +4901,30 @@ function addPaletteColor() {
 
 function getPointerPosition(event) {
   const rect = pixelCanvas.getBoundingClientRect();
-  const x = Math.floor(((event.clientX - rect.left) / rect.width) * state.width);
-  const y = Math.floor(((event.clientY - rect.top) / rect.height) * state.height);
-  const inBounds = x >= 0 && x < state.width && y >= 0 && y < state.height;
-  return { x, y, inBounds };
+  const relativeX = rect.width > 0 ? (event.clientX - rect.left) / rect.width : -1;
+  const relativeY = rect.height > 0 ? (event.clientY - rect.top) / rect.height : -1;
+  const canvasX = relativeX * state.width;
+  const canvasY = relativeY * state.height;
+  const x = Math.floor(canvasX);
+  const y = Math.floor(canvasY);
+  const inBounds = relativeX >= 0 && relativeX < 1 && relativeY >= 0 && relativeY < 1;
+  return { x, y, inBounds, canvasX, canvasY };
 }
 
 function applyBrush(x, y, handler) {
   const offset = Math.floor(state.brushSize / 2);
+  let applied = false;
   for (let by = 0; by < state.brushSize; by += 1) {
     for (let bx = 0; bx < state.brushSize; bx += 1) {
       const px = x - offset + bx;
       const py = y - offset + by;
-      if (px >= 0 && px < state.width && py >= 0 && py < state.height) {
+      if (px >= 0 && px < state.width && py >= 0 && py < state.height && isPixelSelected(px, py)) {
         handler(px, py);
+        applied = true;
       }
     }
   }
+  return applied;
 }
 
 function drawBrush(x, y, targetCtx = null) {
@@ -3594,11 +4933,13 @@ function drawBrush(x, y, targetCtx = null) {
   if (!context) {
     return;
   }
-  markHistoryDirty();
   context.fillStyle = state.color;
-  applyBrush(x, y, (px, py) => {
+  const applied = applyBrush(x, y, (px, py) => {
     context.fillRect(px, py, 1, 1);
   });
+  if (applied) {
+    markHistoryDirty();
+  }
 }
 
 function drawLine(x0, y0, x1, y1, usePen = true) {
@@ -3643,10 +4984,12 @@ function eraseBrush(x, y, targetCtx = null) {
   if (!context) {
     return;
   }
-  markHistoryDirty();
-  applyBrush(x, y, (px, py) => {
+  const applied = applyBrush(x, y, (px, py) => {
     context.clearRect(px, py, 1, 1);
   });
+  if (applied) {
+    markHistoryDirty();
+  }
 }
 
 function getPixelColor(x, y) {
@@ -3672,10 +5015,14 @@ function floodFill(x, y, hexColor) {
   if (!activeLayer) {
     return;
   }
+  if (!isPixelSelected(x, y)) {
+    return;
+  }
   const layerCtx = activeLayer.ctx;
-  const imageData = layerCtx.getImageData(0, 0, state.width, state.height);
+  const { width, height } = state;
+  const imageData = layerCtx.getImageData(0, 0, width, height);
   const pixels = new Uint32Array(imageData.data.buffer);
-  const targetIndex = y * state.width + x;
+  const targetIndex = y * width + x;
   const targetColor = pixels[targetIndex];
   const fillColor = hexToUint32(hexColor);
   if (targetColor === fillColor) {
@@ -3683,18 +5030,27 @@ function floodFill(x, y, hexColor) {
   }
 
   const stack = [[x, y]];
+  let filled = false;
   while (stack.length > 0) {
     const [cx, cy] = stack.pop();
-    const index = cy * state.width + cx;
+    if (!isPixelSelected(cx, cy)) {
+      continue;
+    }
+    const index = cy * width + cx;
     if (pixels[index] !== targetColor) {
       continue;
     }
     pixels[index] = fillColor;
+    filled = true;
 
     if (cx > 0) stack.push([cx - 1, cy]);
-    if (cx < state.width - 1) stack.push([cx + 1, cy]);
+    if (cx < width - 1) stack.push([cx + 1, cy]);
     if (cy > 0) stack.push([cx, cy - 1]);
-    if (cy < state.height - 1) stack.push([cx, cy + 1]);
+    if (cy < height - 1) stack.push([cx, cy + 1]);
+  }
+
+  if (!filled) {
+    return;
   }
 
   layerCtx.putImageData(imageData, 0, 0);
@@ -3759,6 +5115,7 @@ function resizeCanvas(newWidth, newHeight) {
   state.height = clampedHeight;
   widthInput.value = String(clampedWidth);
   heightInput.value = String(clampedHeight);
+  clearSelection({ silent: true });
   updatePixelSize({ skipComposite: true });
   compositeLayers();
   refreshExportOptions();
@@ -3833,10 +5190,54 @@ function handlePointerDown(event) {
     }
     return;
   }
+  if (shouldStartCanvasPan(event)) {
+    beginCanvasPan(event);
+    return;
+  }
   if (event.pointerType === 'touch' && zoomPointers.size >= 2) {
     return;
   }
-  const { x, y, inBounds } = getPointerPosition(event);
+  const position = getPointerPosition(event);
+  const { x, y, inBounds, canvasX, canvasY } = position;
+  if (
+    inBounds &&
+    isSelectionTool(state.tool) &&
+    hasActiveSelection() &&
+    !selectionState.isDragging &&
+    !selectionState.isMoving &&
+    isPixelSelected(x, y)
+  ) {
+    const moved = beginSelectionMove(x, y, event.pointerId, pixelCanvas);
+    if (moved) {
+      updateCursorInfo(x, y);
+      return;
+    }
+  }
+  if (state.tool === 'selectRect') {
+    if (inBounds) {
+      beginRectSelection(x, y, event.pointerId, pixelCanvas);
+    } else {
+      clearSelection();
+    }
+    return;
+  }
+  if (state.tool === 'selectLasso') {
+    if (inBounds) {
+      beginLassoSelection(canvasX, canvasY, event.pointerId, pixelCanvas);
+    } else {
+      clearSelection();
+    }
+    return;
+  }
+  if (state.tool === 'selectMagic') {
+  if (inBounds) {
+      performMagicSelection(x, y);
+      updateCursorInfo(x, y);
+    } else {
+      clearSelection();
+    }
+    return;
+  }
   if (!inBounds) {
     return;
   }
@@ -3874,6 +5275,30 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event) {
+  if (panState.active && event.pointerId === panState.pointerId) {
+    updateCanvasPan(event);
+    return;
+  }
+  if (selectionState.isMoving && event.pointerId === selectionState.pointerId) {
+    const position = getPointerPosition(event);
+    updateSelectionMove(position.x, position.y);
+    if (position.inBounds) {
+      updateCursorInfo(position.x, position.y);
+    }
+    return;
+  }
+  if (selectionState.isDragging && event.pointerId === selectionState.pointerId) {
+    const position = getPointerPosition(event);
+    if (selectionState.mode === 'selectRect') {
+      updateRectSelection(position.x, position.y);
+    } else if (selectionState.mode === 'selectLasso') {
+      updateLassoSelection(position.canvasX, position.canvasY);
+    }
+    if (position.inBounds) {
+      updateCursorInfo(position.x, position.y);
+    }
+    return;
+  }
   if (virtualCursorState.enabled && event.pointerType === 'touch') {
     if (event.pointerId === virtualCursorState.pointerId) {
       const position = getPointerPosition(event);
@@ -3947,8 +5372,24 @@ function handlePointerMove(event) {
 }
 
 function handlePointerUp(event) {
+  let handledSelection = false;
+  if (event && selectionState.isMoving && event.pointerId === selectionState.pointerId) {
+    finalizeSelectionMove();
+    handledSelection = true;
+  }
+  if (event && selectionState.isDragging && event.pointerId === selectionState.pointerId) {
+    finalizeSelectionDrag();
+    handledSelection = true;
+  }
+  const panEnded = endCanvasPan(event);
   if (event && event.pointerType === 'touch') {
     handleZoomPointerUp(event);
+  }
+  if (handledSelection) {
+    return;
+  }
+  if (panEnded) {
+    return;
   }
   if (
     virtualCursorState.enabled &&
@@ -3994,6 +5435,9 @@ function initEvents() {
   });
   pixelCanvas.addEventListener('pointercancel', handlePointerUp);
   window.addEventListener('pointerup', handlePointerUp);
+  window.addEventListener('keydown', handleCanvasPanKeyDown, { capture: true });
+  window.addEventListener('keyup', handleCanvasPanKeyUp, { capture: true });
+  window.addEventListener('blur', resetCanvasPanKeyState);
 
   pixelSizeInput.addEventListener('input', () => updatePixelSize());
   pixelSizeInput.addEventListener('change', () => updatePixelSize());
@@ -4012,8 +5456,22 @@ function initEvents() {
   });
 
   toolButtons.forEach((button) => {
-    button.addEventListener('click', () => setActiveTool(button.dataset.tool || 'pen'));
+    button.addEventListener('click', () => {
+      const targetTool = button.dataset.tool || 'pen';
+      setActiveTool(targetTool);
+      if (isSelectionTool(targetTool)) {
+        closeSelectionToolPanel();
+      }
+    });
   });
+
+  if (selectionToolToggle) {
+    selectionToolToggle.addEventListener('click', () => {
+      toggleSelectionToolPanel();
+    });
+  }
+
+  document.addEventListener('click', handleSelectionToolDocumentClick);
 
   if (exportConfirmButton) {
     exportConfirmButton.addEventListener('click', () => {
@@ -4075,9 +5533,19 @@ function initEvents() {
     const targetElement = event.target instanceof HTMLElement ? event.target : null;
     const tagName = targetElement ? targetElement.tagName : '';
     const isTextField = targetElement && (targetElement.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA');
-    if (event.key === 'Escape' && activePanel) {
-      closeActivePanel();
-      return;
+    if (event.key === 'Escape') {
+      let handled = false;
+      if (selectionToolPanelOpen) {
+        closeSelectionToolPanel();
+        handled = true;
+      }
+      if (activePanel) {
+        closeActivePanel();
+        return;
+      }
+      if (handled) {
+        return;
+      }
     }
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !isTextField) {
       const key = event.key.toLowerCase();
@@ -4113,6 +5581,7 @@ async function init() {
   pixelCanvas.style.touchAction = 'none';
   initPalette();
   initVirtualCursorUI();
+  initSelectionOverlay();
   let restored = false;
   try {
     restored = await restoreProjectState();
@@ -4204,6 +5673,7 @@ async function init() {
   initZoomControls();
   initPreviewWindow();
   initEvents();
+  updatePanCursorState();
   updateToolDockStatus();
   updatePaletteDockStatus();
   updateCanvasDockStatus();
