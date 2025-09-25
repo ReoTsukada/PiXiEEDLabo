@@ -26,6 +26,16 @@
         data-collapsed="true"
         style="top: 24px; left: 24px"
       >
+        <div class="floating-dock__grip">
+          <button
+            class="floating-dock__handle"
+            type="button"
+            id="dockHandle"
+            aria-label="ツールボタンを移動"
+          >
+            <span class="mini-dock__drag-line" aria-hidden="true"></span>
+          </button>
+        </div>
         <div class="floating-dock__bar">
           <button
             class="floating-dock__toggle"
@@ -40,14 +50,6 @@
             <span class="sr-only">ドックの表示を切り替え</span>
           </button>
           <span class="app-title">PiXiEEDraw</span>
-          <button
-            class="floating-dock__handle"
-            type="button"
-            id="dockHandle"
-            aria-label="ツールボタンを移動"
-          >
-            <span aria-hidden="true">⋮⋮</span>
-          </button>
         </div>
         <div class="floating-dock__content">
           <div class="floating-dock__group floating-dock__group--mini" id="dockMenu">
@@ -79,12 +81,47 @@
                   <button class="mini-button tool-button" type="button" data-tool="fill" data-icon="assets/icons/tool-fill.png" aria-label="塗りつぶし">
                     <img src="assets/icons/tool-fill.png" alt="塗りつぶし" width="32" height="32" />
                   </button>
+                  <button
+                    class="mini-button tool-button"
+                    type="button"
+                    data-toggle="selectionTools"
+                    data-default-tool="selectRect"
+                    data-default-icon="assets/icons/tool-select-rect.svg"
+                    data-default-label="範囲選択ツール"
+                    aria-label="範囲選択ツール"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                  >
+                    <img
+                      id="selectionToolToggleIcon"
+                      src="assets/icons/tool-select-rect.svg"
+                      alt="範囲選択ツール"
+                      width="32"
+                      height="32"
+                    />
+                  </button>
+                  <button class="mini-button tool-button" type="button" data-tool="pan" data-icon="assets/icons/tool-pan.svg" aria-label="キャンバス移動">
+                    <img src="assets/icons/tool-pan.svg" alt="キャンバス移動" width="32" height="32" />
+                  </button>
                   <button class="mini-button tool-button" type="button" data-tool="eyedropper" data-icon="assets/icons/tool-eyedropper.png" aria-label="スポイト">
                     <img src="assets/icons/tool-eyedropper.png" alt="スポイト" width="32" height="32" />
                   </button>
                   <button class="mini-button tool-button" type="button" data-toggle="virtualCursor" data-icon="assets/icons/tool-cursor.png" aria-label="仮想カーソル">
                     <img src="assets/icons/tool-cursor.png" alt="仮想カーソル" width="32" height="32" />
                   </button>
+                </div>
+                <div class="mini-dock__selection-panel" id="selectionToolPanel" hidden aria-hidden="true">
+                  <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="範囲選択モード">
+                    <button class="mini-button tool-button" type="button" data-tool="selectRect" data-icon="assets/icons/tool-select-rect.svg" aria-label="四角形範囲選択">
+                      <img src="assets/icons/tool-select-rect.svg" alt="四角形範囲選択" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="selectLasso" data-icon="assets/icons/tool-select-lasso.svg" aria-label="投げ縄選択">
+                      <img src="assets/icons/tool-select-lasso.svg" alt="投げ縄選択" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="selectMagic" data-icon="assets/icons/tool-select-magic.svg" aria-label="同色選択">
+                      <img src="assets/icons/tool-select-magic.svg" alt="同色選択" width="32" height="32" />
+                    </button>
+                  </div>
                 </div>
                 <div class="mini-dock__form mini-dock__form--brush">
                   <label class="mini-field mini-field--inline">
