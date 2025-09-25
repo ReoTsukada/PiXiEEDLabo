@@ -7,6 +7,8 @@ let selectionOutlineCanvas = null;
 let selectionOutlineCtx = null;
 let selectionContentCanvas = null;
 let selectionContentCtx = null;
+let virtualCursorPreviewCanvas = null;
+let virtualCursorPreviewCtx = null;
 const pixelSizeInput = document.getElementById('pixelSize');
 const widthInput = document.getElementById('canvasWidth');
 const heightInput = document.getElementById('canvasHeight');
@@ -169,6 +171,7 @@ const virtualCursorState = {
   residualDY: 0,
   prevDrawX: null,
   prevDrawY: null,
+  previewPixels: new Map(),
 };
 
 let virtualCursorElement = null;
