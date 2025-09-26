@@ -9,6 +9,10 @@ let selectionContentCanvas = null;
 let selectionContentCtx = null;
 let virtualCursorPreviewCanvas = null;
 let virtualCursorPreviewCtx = null;
+let shapePreviewCanvas = null;
+let shapePreviewCtx = null;
+let overlayDirty = false;
+let overlayRafId = null;
 const pixelSizeInput = document.getElementById('pixelSize');
 const widthInput = document.getElementById('canvasWidth');
 const heightInput = document.getElementById('canvasHeight');
@@ -23,6 +27,10 @@ const selectionToolToggle = document.querySelector('[data-toggle="selectionTools
 const selectionToolPanel = document.getElementById('selectionToolPanel');
 const selectionToolToggleIcon = document.getElementById('selectionToolToggleIcon');
 const selectionToolIds = ['selectRect', 'selectLasso', 'selectMagic'];
+const shapeToolToggle = document.querySelector('[data-toggle="shapeTools"]');
+const shapeToolPanel = document.getElementById('shapeToolPanel');
+const shapeToolToggleIcon = document.getElementById('shapeToolToggleIcon');
+const shapeToolIds = ['shapeLine', 'shapeCurve', 'shapeCircle', 'shapeCircleFill', 'shapeRect', 'shapeRectFill'];
 const panelOverlay = document.getElementById('panelOverlay');
 const floatingPanels = Array.from(document.querySelectorAll('.floating-panel'));
 const panelToggleButtons = Array.from(document.querySelectorAll('[data-panel-target]'));
@@ -44,6 +52,7 @@ const layerDockStatusText = document.getElementById('layerDockStatus');
 const layerListElement = document.getElementById('layerList');
 const addLayerButton = document.getElementById('addLayer');
 const deleteLayerButton = document.getElementById('deleteLayer');
+const addFrameButton = document.getElementById('addFrame');
 const togglePreviewButton = document.getElementById('togglePreview');
 const undoButton = document.getElementById('undoAction');
 const redoButton = document.getElementById('redoAction');
@@ -204,10 +213,32 @@ const SELECTION_DASH_LENGTH_PX = 4;
 const SELECTION_DASH_SPEED_PX = 15;
 const SELECTION_COLOR_LIGHT = '#ffffff';
 const SELECTION_COLOR_DARK = '#000000';
+const FLOOD_FILL_BATCH_SIZE = 4096;
 let selectionAnimationFrame = null;
 let selectionAnimationLastTime = null;
 let selectionDashPhasePx = 0;
 let selectionToolPanelOpen = false;
+let shapeToolPanelOpen = false;
+
+const floodFillState = {
+  task: null,
+};
+
+const shapeState = {
+  active: false,
+  tool: null,
+  pointerId: null,
+  start: null,
+  current: null,
+  color: null,
+  captureTarget: null,
+};
+
+const framesState = {
+  frames: [],
+  activeId: null,
+  nextId: 1,
+};
 
 let activeSwatch = null;
 let isDrawing = false;
@@ -240,6 +271,9 @@ const layerDragState = {
   draggingId: null,
   dropBeforeId: null,
 };
+let layerTimelineScrollLeft = 0;
+let layerTimelineScrollInitialized = false;
+let isSyncingLayerTimelineScroll = false;
 let saveTimer = null;
 let pendingSave = false;
 let isRestoringState = false;
@@ -376,6 +410,19 @@ function detectLayerHasContent(layer) {
   return false;
 }
 
+function hasImageDataContent(imageData) {
+  if (!imageData || !imageData.data) {
+    return false;
+  }
+  const data = imageData.data;
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] !== 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function refreshLayerContentFlag(layer) {
   const hasContent = detectLayerHasContent(layer);
   if (layer.hasContent !== hasContent) {
@@ -393,7 +440,85 @@ function canUseLocalStorage() {
   }
 }
 
+function imageDataToDataURL(imageData) {
+  if (!imageData) {
+    return null;
+  }
+  const { width, height } = imageData;
+  const { canvas, ctx } = createOffscreenCanvas(width, height);
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+async function imageDataFromDataURL(dataURL, width, height) {
+  const { canvas, ctx } = createOffscreenCanvas(width, height);
+  ctx.clearRect(0, 0, width, height);
+  if (dataURL) {
+    const image = await loadImageFromDataURL(dataURL);
+    ctx.drawImage(image, 0, 0, width, height);
+  }
+  return ctx.getImageData(0, 0, width, height);
+}
+
+function snapshotToSerializable(snapshot) {
+  if (!snapshot) {
+    return null;
+  }
+  return {
+    width: snapshot.width,
+    height: snapshot.height,
+    selectedId: snapshot.selectedId,
+    nextId: snapshot.nextId,
+    layers: snapshot.layers.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      visible: layer.visible,
+      opacity: layer.opacity,
+      image: imageDataToDataURL(layer.imageData),
+    })),
+  };
+}
+
+async function snapshotFromSerializable(serialized) {
+  if (!serialized || !Array.isArray(serialized.layers)) {
+    return null;
+  }
+  const width = clamp(Number(serialized.width) || state.width, Number(widthInput.min), Number(widthInput.max));
+  const height = clamp(Number(serialized.height) || state.height, Number(heightInput.min), Number(heightInput.max));
+  const layers = [];
+  for (const layerData of serialized.layers) {
+    const imageData = await imageDataFromDataURL(layerData.image, width, height);
+    layers.push({
+      id: typeof layerData.id === 'string' ? layerData.id : `layer-${layersState.nextId}`,
+      name: typeof layerData.name === 'string' ? layerData.name : `レイヤー${layersState.nextId}`,
+      visible: layerData.visible !== false,
+      opacity: clamp(Number(layerData.opacity ?? 1), 0, 1),
+      imageData,
+    });
+  }
+  return {
+    width,
+    height,
+    selectedId: typeof serialized.selectedId === 'string' ? serialized.selectedId : null,
+    nextId: Number(serialized.nextId) || layers.length + 1,
+    layers,
+  };
+}
+
+function computeFrameLayerContent(snapshot) {
+  const map = new Map();
+  if (!snapshot || !Array.isArray(snapshot.layers)) {
+    return map;
+  }
+  snapshot.layers.forEach((layer) => {
+    map.set(layer.id, hasImageDataContent(layer.imageData));
+  });
+  return map;
+}
+
 function serializeAppState() {
+  initFrames();
+  saveCurrentFrame();
   const layers = layersState.layers.map((layer) => ({
     id: layer.id,
     name: layer.name,
@@ -401,8 +526,14 @@ function serializeAppState() {
     opacity: layer.opacity,
     image: layer.canvas.toDataURL('image/png'),
   }));
+  const frames = framesState.frames.map((frame) => ({
+    id: frame.id,
+    name: frame.name,
+    snapshot: frame.snapshot ? snapshotToSerializable(frame.snapshot) : null,
+    layerContent: frame.layerContent ? Object.fromEntries(frame.layerContent) : undefined,
+  }));
   return {
-    version: 1,
+    version: 2,
     canvas: {
       width: state.width,
       height: state.height,
@@ -410,6 +541,9 @@ function serializeAppState() {
     selectedId: layersState.selectedId,
     nextId: layersState.nextId,
     layers,
+    frames,
+    framesActiveId: framesState.activeId,
+    framesNextId: framesState.nextId,
   };
 }
 
@@ -530,6 +664,57 @@ async function restoreProjectState() {
       layersState.selectedId = fallbackLayer.id;
     }
 
+    const baseFrameSnapshot = captureHistorySnapshot();
+    framesState.frames = [];
+    framesState.activeId = null;
+    framesState.nextId = Number(payload.framesNextId) > 0 ? Number(payload.framesNextId) : 1;
+    const framePayload = Array.isArray(payload.frames) ? payload.frames : [];
+    if (framePayload.length) {
+      for (const frameData of framePayload) {
+        let snapshotData = baseFrameSnapshot;
+        if (frameData && frameData.snapshot) {
+          try {
+            const deserialized = await snapshotFromSerializable(frameData.snapshot);
+            if (deserialized) {
+              snapshotData = deserialized;
+            }
+          } catch (error) {
+            console.warn('フレームの復元に失敗しました', error);
+            snapshotData = baseFrameSnapshot;
+          }
+        }
+        const providedId = typeof frameData?.id === 'string' ? frameData.id : null;
+        const numericId = getFrameNumericId(providedId);
+        if (Number.isFinite(numericId)) {
+          framesState.nextId = Math.max(framesState.nextId, numericId + 1);
+        }
+        const frameId = providedId || `frame-${framesState.nextId++}`;
+        const frameName = typeof frameData?.name === 'string' && frameData.name.trim().length > 0 ? frameData.name.trim() : frameId.replace('frame-', 'フレーム');
+        const clonedSnapshot = cloneSnapshot(snapshotData);
+        framesState.frames.push({
+          id: frameId,
+          name: frameName,
+          snapshot: clonedSnapshot,
+          layerContent: computeFrameLayerContent(clonedSnapshot),
+        });
+      }
+      const desiredFrameId = typeof payload.framesActiveId === 'string' ? payload.framesActiveId : framesState.frames[0]?.id;
+      const activeFrame = getFrameById(desiredFrameId) || framesState.frames[0] || null;
+      if (activeFrame && activeFrame.snapshot) {
+        framesState.activeId = activeFrame.id;
+        if (activeFrame !== framesState.frames[0] || desiredFrameId !== framesState.frames[0]?.id) {
+          applyHistorySnapshot(activeFrame.snapshot);
+        }
+      }
+    }
+    if (!framesState.frames.length) {
+      const frame = createFrameFromSnapshot(baseFrameSnapshot);
+      framesState.frames.push(frame);
+      framesState.activeId = frame.id;
+    }
+
+    saveCurrentFrame();
+
     renderLayerList();
     updateLayerDockStatus();
     updateLayerControlAvailability();
@@ -576,17 +761,18 @@ function updateUndoRedoUI() {
   }
 }
 
-function pushHistorySnapshot() {
+function pushHistorySnapshot(snapshotOverride = null) {
   if (isRestoringState) {
-    return;
+    return snapshotOverride;
   }
-  const snapshot = captureHistorySnapshot();
+  const snapshot = snapshotOverride || captureHistorySnapshot();
   historyStack.push(snapshot);
   if (historyStack.length > MAX_HISTORY_ENTRIES) {
     historyStack.shift();
   }
   redoStack.length = 0;
   updateUndoRedoUI();
+  return snapshot;
 }
 
 function resetHistory() {
@@ -611,7 +797,8 @@ function finalizeHistoryEntry({ force = false } = {}) {
     return;
   }
   historyDirty = false;
-  pushHistorySnapshot();
+  const snapshot = pushHistorySnapshot();
+  saveCurrentFrame(snapshot);
   queueStateSave();
 }
 
@@ -764,12 +951,18 @@ function selectLayer(layerId) {
   updateLayerSelectionUI();
   updateLayerDockStatus();
   updateLayerControlAvailability();
+  syncFrameSnapshotsWithCurrentLayers();
   if (changed) {
     queueStateSave();
   }
 }
 
 function compositeLayers({ skipUIUpdate = false, skipContentCheck = false } = {}) {
+  if (typeof window !== 'undefined' && compositeFrameId !== null) {
+    window.cancelAnimationFrame(compositeFrameId);
+  }
+  compositeFrameId = null;
+  compositeQueueOptions = null;
   ctx.clearRect(0, 0, state.width, state.height);
   let contentChanged = false;
   for (let index = layersState.layers.length - 1; index >= 0; index -= 1) {
@@ -797,6 +990,107 @@ function compositeLayers({ skipUIUpdate = false, skipContentCheck = false } = {}
   }
 }
 
+let compositeFrameId = null;
+let compositeQueueOptions = null;
+
+function queueCompositeLayers(options = {}) {
+  const { skipUIUpdate = false, skipContentCheck = false } = options;
+  if (!compositeQueueOptions) {
+    compositeQueueOptions = { skipUIUpdate, skipContentCheck };
+  } else {
+    compositeQueueOptions.skipUIUpdate = compositeQueueOptions.skipUIUpdate && skipUIUpdate;
+    compositeQueueOptions.skipContentCheck = compositeQueueOptions.skipContentCheck && skipContentCheck;
+  }
+  if (typeof window === 'undefined') {
+    const opts = compositeQueueOptions || {};
+    compositeQueueOptions = null;
+    compositeLayers(opts);
+    return;
+  }
+  if (compositeFrameId !== null) {
+    return;
+  }
+  compositeFrameId = window.requestAnimationFrame(() => {
+    const opts = compositeQueueOptions || {};
+    compositeQueueOptions = null;
+    compositeFrameId = null;
+    compositeLayers(opts);
+  });
+}
+
+function cancelActiveFloodFill() {
+  if (!floodFillState.task) {
+    return;
+  }
+  const { raf } = floodFillState.task;
+  if (typeof window !== 'undefined' && raf !== null) {
+    window.cancelAnimationFrame(raf);
+  }
+  floodFillState.task = null;
+}
+
+function processFloodFillChunk() {
+  const task = floodFillState.task;
+  if (!task) {
+    return;
+  }
+  task.raf = null;
+  const {
+    stack,
+    pixels,
+    data,
+    targetColor,
+    fillColor,
+    width,
+    height,
+  } = task;
+  let iterations = 0;
+  while (stack.length > 0 && iterations < FLOOD_FILL_BATCH_SIZE) {
+    const cy = stack.pop();
+    const cx = stack.pop();
+    if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
+      continue;
+    }
+    if (!isPixelSelected(cx, cy)) {
+      continue;
+    }
+    const index = cy * width + cx;
+    if (pixels[index] !== targetColor) {
+      continue;
+    }
+    pixels[index] = fillColor;
+    iterations += 1;
+    if (!task.changed) {
+      markHistoryDirty();
+      task.changed = true;
+    }
+    stack.push(cx + 1, cy);
+    stack.push(cx - 1, cy);
+    stack.push(cx, cy + 1);
+    stack.push(cx, cy - 1);
+  }
+
+  if (stack.length > 0) {
+    if (typeof window !== 'undefined') {
+      task.raf = window.requestAnimationFrame(processFloodFillChunk);
+    } else {
+      processFloodFillChunk();
+    }
+    return;
+  }
+
+  floodFillState.task = null;
+  try {
+    if (task.changed) {
+      task.layerCtx.putImageData(task.imageData, 0, 0);
+      queueCompositeLayers();
+      finalizeHistoryEntry();
+    }
+  } catch (error) {
+    console.warn('塗りつぶし結果の適用に失敗しました', error);
+  }
+}
+
 function updateLayerSelectionUI() {
   if (!layerListElement) {
     return;
@@ -818,8 +1112,11 @@ function updateLayerDockStatus() {
   if (!layerDockStatusText) {
     return;
   }
+  initFrames();
   const activeLayer = getActiveLayer();
-  layerDockStatusText.textContent = activeLayer ? activeLayer.name : 'レイヤーなし';
+  const activeFrame = getFrameById(framesState.activeId);
+  const layerName = activeLayer ? activeLayer.name : 'レイヤーなし';
+  layerDockStatusText.textContent = activeFrame ? `${activeFrame.name} · ${layerName}` : layerName;
 }
 
 function updateLayerControlAvailability() {
@@ -835,6 +1132,8 @@ function toggleLayerVisibility(layerId) {
   }
   markHistoryDirty();
   layer.visible = !layer.visible;
+  saveCurrentFrame();
+  syncFrameSnapshotsWithCurrentLayers();
   renderLayerList();
   compositeLayers();
   finalizeHistoryEntry();
@@ -854,6 +1153,7 @@ function renameLayer(layerId, nextName) {
   }
   markHistoryDirty();
   layer.name = trimmed;
+  syncFrameSnapshotsWithCurrentLayers();
   renderLayerList();
   updateLayerDockStatus();
   finalizeHistoryEntry();
@@ -865,6 +1165,7 @@ function addLayer() {
   markHistoryDirty();
   const layer = createLayer({ insertAt, name: `レイヤー${layersState.nextId}`, visible: true, opacity: 1 });
   layersState.selectedId = layer.id;
+  syncFrameSnapshotsWithCurrentLayers();
   renderLayerList();
   updateLayerDockStatus();
   compositeLayers();
@@ -885,6 +1186,7 @@ function deleteLayer(layerId) {
     const fallback = layersState.layers[index] || layersState.layers[index - 1] || layersState.layers[0] || null;
     layersState.selectedId = fallback ? fallback.id : null;
   }
+  syncFrameSnapshotsWithCurrentLayers();
   renderLayerList();
   updateLayerDockStatus();
   updateLayerControlAvailability();
@@ -908,6 +1210,7 @@ function reorderLayer(layerId, newIndex) {
   }
   targetIndex = clamp(targetIndex, 0, layersState.layers.length);
   layersState.layers.splice(targetIndex, 0, layer);
+  syncFrameSnapshotsWithCurrentLayers();
   renderLayerList();
   updateLayerDockStatus();
   compositeLayers();
@@ -918,6 +1221,7 @@ function renderLayerList() {
   if (!layerListElement) {
     return;
   }
+  initFrames();
   layerListElement.innerHTML = '';
 
   const layersForDisplay = layersState.layers.slice();
@@ -977,7 +1281,12 @@ function renderLayerList() {
     visibilityButton.setAttribute('aria-label', visibilityLabel);
     visibilityButton.title = visibilityLabel;
     visibilityButton.addEventListener('click', (event) => {
+      event.preventDefault();
       event.stopPropagation();
+      toggleLayerVisibility(layer.id);
+    });
+    visibilityButton.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
       toggleLayerVisibility(layer.id);
     });
     item.appendChild(visibilityButton);
@@ -1021,22 +1330,65 @@ function renderLayerList() {
     });
     item.appendChild(nameInput);
 
-    const badge = document.createElement('span');
-    badge.className = 'layer-item__badge';
-    badge.dataset.filled = layer.hasContent ? 'true' : 'false';
-    const badgeLabel = layer.hasContent ? '描画あり' : '空レイヤー';
-    badge.setAttribute('role', 'img');
-    badge.setAttribute('aria-label', badgeLabel);
-    badge.title = badgeLabel;
-    item.appendChild(badge);
-
-    item.addEventListener('click', (event) => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target && target.closest('[data-layer-control]')) {
+    const timeline = document.createElement('div');
+    timeline.className = 'layer-item__timeline';
+    timeline.setAttribute('role', 'group');
+    timeline.addEventListener('scroll', handleLayerTimelineScroll);
+    framesState.frames.forEach((frame, index) => {
+      const frameButton = document.createElement('button');
+      frameButton.type = 'button';
+      frameButton.className = 'layer-item__frame';
+      frameButton.dataset.frameId = frame.id;
+      frameButton.textContent = String(index + 1);
+      if (frame.id === framesState.activeId) {
+        frameButton.dataset.active = 'true';
+      }
+      const filled = frame.layerContent?.get(layer.id) || false;
+      frameButton.dataset.filled = filled ? 'true' : 'false';
+      frameButton.title = frame.name;
+      timeline.appendChild(frameButton);
+    });
+    const timelineAddButton = document.createElement('button');
+    timelineAddButton.type = 'button';
+    timelineAddButton.className = 'layer-item__frame layer-item__frame--add';
+    timelineAddButton.dataset.action = 'add';
+    timelineAddButton.textContent = '+';
+    timelineAddButton.title = 'フレームを追加 (Shift+クリックで空のフレーム)';
+    timeline.appendChild(timelineAddButton);
+    timeline.addEventListener('click', (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest('.layer-item__frame') : null;
+      if (!target) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (target.dataset.action === 'add') {
+        addFrame({ duplicate: !event.shiftKey });
+        return;
+      }
+      const frameId = target.dataset.frameId;
+      if (!frameId) {
         return;
       }
       selectLayer(layer.id);
+      selectFrame(frameId);
     });
+    if (!layerTimelineScrollInitialized && layer === layersForDisplay[0]) {
+      window.requestAnimationFrame(() => {
+        const activeFrameButton = timeline.querySelector('[data-frame-id][data-active="true"]');
+        if (activeFrameButton && timeline instanceof HTMLElement) {
+          const targetLeft = activeFrameButton.offsetLeft - timeline.clientWidth / 2 + activeFrameButton.offsetWidth / 2;
+          layerTimelineScrollLeft = Math.max(0, targetLeft);
+        } else {
+          layerTimelineScrollLeft = timeline.scrollLeft;
+        }
+        layerTimelineScrollInitialized = true;
+        syncLayerTimelineScroll();
+      });
+    } else if (layerTimelineScrollInitialized) {
+      timeline.scrollLeft = layerTimelineScrollLeft;
+    }
+    item.appendChild(timeline);
 
     item.addEventListener('dragstart', (event) => {
       if (layerDragState.draggingId !== layer.id) {
@@ -1080,6 +1432,40 @@ function clearLayerDragHighlights() {
   layerListElement.classList.remove('layer-dock__list--drop-after');
 }
 
+function syncLayerTimelineScroll(source = null) {
+  if (!layerListElement) {
+    return;
+  }
+  isSyncingLayerTimelineScroll = true;
+  const timelines = layerListElement.querySelectorAll('.layer-item__timeline');
+  timelines.forEach((timeline) => {
+    if (!(timeline instanceof HTMLElement)) {
+      return;
+    }
+    if (source && timeline === source) {
+      return;
+    }
+    timeline.scrollLeft = layerTimelineScrollLeft;
+  });
+  isSyncingLayerTimelineScroll = false;
+}
+
+function handleLayerTimelineScroll(event) {
+  if (!layerListElement) {
+    return;
+  }
+  if (isSyncingLayerTimelineScroll) {
+    return;
+  }
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  layerTimelineScrollLeft = target.scrollLeft;
+  layerTimelineScrollInitialized = true;
+  syncLayerTimelineScroll(target);
+}
+
 function handleLayerDragOver(event) {
   if (!layerListElement || !layerDragState.draggingId) {
     return;
@@ -1091,6 +1477,7 @@ function handleLayerDragOver(event) {
   const items = Array.from(layerListElement.querySelectorAll('.layer-item'));
   clearLayerDragHighlights();
 
+  const availableItems = items.filter((item) => item.dataset.layerId !== layerDragState.draggingId);
   let dropBeforeId = null;
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
@@ -1104,6 +1491,21 @@ function handleLayerDragOver(event) {
       dropBeforeId = layerId;
       item.classList.add('layer-item--dragover');
       break;
+    }
+  }
+  if (!dropBeforeId && availableItems.length > 0) {
+    const firstItem = availableItems[0];
+    if (firstItem) {
+      const firstRect = firstItem.getBoundingClientRect();
+      if (event.clientY < firstRect.top) {
+        dropBeforeId = firstItem.dataset.layerId || null;
+        if (dropBeforeId) {
+          firstItem.classList.add('layer-item--dragover');
+          layerListElement.classList.remove('layer-dock__list--drop-after');
+          layerDragState.dropBeforeId = dropBeforeId;
+          return;
+        }
+      }
     }
   }
   if (!dropBeforeId) {
@@ -1123,13 +1525,9 @@ function handleLayerDrop(event) {
   let targetIndex;
   if (dropBeforeId) {
     const beforeIndex = getLayerIndex(dropBeforeId);
-    if (beforeIndex === -1) {
-      targetIndex = layersState.layers.length;
-    } else {
-      targetIndex = beforeIndex + 1;
-    }
+    targetIndex = beforeIndex === -1 ? layersState.layers.length : beforeIndex;
   } else {
-    targetIndex = 0;
+    targetIndex = layersState.layers.length;
   }
   reorderLayer(layerDragState.draggingId, targetIndex);
   layerDragState.draggingId = null;
@@ -1177,6 +1575,9 @@ function getWrapperMetrics() {
 }
 
 function cancelActiveDrawing() {
+  if (shapeState.active) {
+    cancelShapeDrawing();
+  }
   if (
     activePointerId !== null &&
     typeof pixelCanvas.releasePointerCapture === 'function' &&
@@ -1187,6 +1588,7 @@ function cancelActiveDrawing() {
   }
   activePointerId = null;
   isDrawing = false;
+  cancelActiveFloodFill();
 }
 
 const defaultPalette = [
@@ -1260,6 +1662,8 @@ function initSelectionOverlay() {
     return existingCanvas;
   };
 
+  virtualCursorPreviewCanvas = ensureCanvas(virtualCursorPreviewCanvas, 'selection-canvas selection-canvas--preview');
+  shapePreviewCanvas = ensureCanvas(shapePreviewCanvas, 'selection-canvas selection-canvas--shape');
   selectionContentCanvas = ensureCanvas(selectionContentCanvas, 'selection-canvas selection-canvas--content');
   selectionOutlineCanvas = ensureCanvas(selectionOutlineCanvas, 'selection-canvas selection-canvas--outline');
 
@@ -1279,6 +1683,12 @@ function initSelectionOverlay() {
     ctxRefSetter(ctx);
   };
 
+  resizeCanvas(virtualCursorPreviewCanvas, (ctx) => {
+    virtualCursorPreviewCtx = ctx;
+  });
+  resizeCanvas(shapePreviewCanvas, (ctx) => {
+    shapePreviewCtx = ctx;
+  });
   resizeCanvas(selectionContentCanvas, (ctx) => {
     selectionContentCtx = ctx;
   });
@@ -1286,11 +1696,15 @@ function initSelectionOverlay() {
     selectionOutlineCtx = ctx;
   });
 
+  canvasStage.appendChild(virtualCursorPreviewCanvas);
+  canvasStage.appendChild(shapePreviewCanvas);
   canvasStage.appendChild(selectionContentCanvas);
   canvasStage.appendChild(selectionOutlineCanvas);
 
   renderSelectionOverlay();
   refreshSelectionContentPreview();
+  refreshVirtualCursorPreview();
+  renderShapePreview();
 }
 
 function updateSelectionCanvasSize() {
@@ -1513,6 +1927,91 @@ function filterMaskToActiveLayer(mask, bounds) {
   };
 }
 
+function clearVirtualCursorPreview() {
+  if (virtualCursorState.previewPixels) {
+    virtualCursorState.previewPixels.clear();
+  }
+  if (virtualCursorPreviewCtx && virtualCursorPreviewCanvas) {
+    virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
+  }
+}
+
+function refreshVirtualCursorPreview() {
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
+    return;
+  }
+  virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
+  if (!virtualCursorState.previewPixels || virtualCursorState.previewPixels.size === 0) {
+    return;
+  }
+  const pixelSize = state.pixelSize;
+  for (const [key, color] of virtualCursorState.previewPixels.entries()) {
+    const [pxStr, pyStr] = key.split(',');
+    const px = Number(pxStr);
+    const py = Number(pyStr);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      continue;
+    }
+    virtualCursorPreviewCtx.fillStyle = color;
+    virtualCursorPreviewCtx.fillRect(px * pixelSize, py * pixelSize, pixelSize, pixelSize);
+  }
+}
+
+function addVirtualCursorPreviewPixel(px, py, color) {
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
+    return;
+  }
+  const key = `${px},${py}`;
+  if (!virtualCursorState.previewPixels) {
+    virtualCursorState.previewPixels = new Map();
+  }
+  if (virtualCursorState.previewPixels.has(key)) {
+    return;
+  }
+  virtualCursorState.previewPixels.set(key, color);
+  const pixelSize = state.pixelSize;
+  virtualCursorPreviewCtx.fillStyle = color;
+  virtualCursorPreviewCtx.fillRect(px * pixelSize, py * pixelSize, pixelSize, pixelSize);
+}
+
+function drawBrushPreview(x, y) {
+  if (!virtualCursorPreviewCtx) {
+    initSelectionOverlay();
+  }
+  if (!virtualCursorPreviewCtx) {
+    return;
+  }
+  const color = state.color;
+  applyBrush(x, y, (px, py) => {
+    addVirtualCursorPreviewPixel(px, py, color);
+  });
+}
+
+function beginVirtualCursorPreviewStroke(x, y) {
+  if (!virtualCursorState.previewPixels) {
+    virtualCursorState.previewPixels = new Map();
+  } else {
+    virtualCursorState.previewPixels.clear();
+  }
+  if (!virtualCursorPreviewCtx) {
+    initSelectionOverlay();
+  }
+  if (virtualCursorPreviewCtx && virtualCursorPreviewCanvas) {
+    virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
+  }
+  drawBrushPreview(x, y);
+}
+
+function extendVirtualCursorPreviewPoint(x, y) {
+  drawBrushPreview(x, y);
+}
+
+function drawVirtualCursorPreviewLine(x0, y0, x1, y1) {
+  drawLinePixels(x0, y0, x1, y1, (px, py) => {
+    drawBrushPreview(px, py);
+  });
+}
+
 function clearSelectionContentCanvas() {
   if (!selectionContentCtx || !selectionContentCanvas) {
     return;
@@ -1545,6 +2044,510 @@ function refreshSelectionContentPreview() {
   } else {
     clearSelectionContentCanvas();
   }
+}
+
+function clearShapePreview() {
+  if (!shapePreviewCtx || !shapePreviewCanvas) {
+    return;
+  }
+  shapePreviewCtx.clearRect(0, 0, shapePreviewCanvas.width, shapePreviewCanvas.height);
+}
+
+function renderShapePreview() {
+  if (!shapePreviewCtx) {
+    initSelectionOverlay();
+  }
+  if (!shapePreviewCtx || !shapeState.active || !shapeState.start || !shapeState.current) {
+    clearShapePreview();
+    return;
+  }
+  const pixels = collectShapePixels(shapeState.tool, shapeState.start, shapeState.current);
+  clearShapePreview();
+  if (!pixels || pixels.size === 0) {
+    return;
+  }
+  const pixelSize = state.pixelSize;
+  const color = shapeState.color || state.color;
+  shapePreviewCtx.save();
+  shapePreviewCtx.globalAlpha = 0.85;
+  shapePreviewCtx.fillStyle = color;
+  for (const key of pixels) {
+    const [pxStr, pyStr] = key.split(',');
+    const px = Number(pxStr);
+    const py = Number(pyStr);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      continue;
+    }
+    shapePreviewCtx.fillRect(px * pixelSize, py * pixelSize, pixelSize, pixelSize);
+  }
+  shapePreviewCtx.restore();
+}
+
+function releaseShapeCapture() {
+  if (
+    shapeState.captureTarget &&
+    shapeState.pointerId !== null &&
+    typeof shapeState.captureTarget.releasePointerCapture === 'function'
+  ) {
+    try {
+      shapeState.captureTarget.releasePointerCapture(shapeState.pointerId);
+    } catch (_) {
+      // ignore
+    }
+  }
+  shapeState.captureTarget = null;
+  shapeState.pointerId = null;
+}
+
+function resetShapeState() {
+  shapeState.active = false;
+  shapeState.tool = null;
+  shapeState.pointerId = null;
+  shapeState.start = null;
+  shapeState.current = null;
+  shapeState.color = null;
+  shapeState.captureTarget = null;
+}
+
+function beginShapeDrawing(x, y, pointerId, target) {
+  if (!isShapeTool(state.tool)) {
+    return false;
+  }
+  const maxX = Math.max(0, state.width - 1);
+  const maxY = Math.max(0, state.height - 1);
+  const clampedX = clamp(x, 0, maxX);
+  const clampedY = clamp(y, 0, maxY);
+  shapeState.active = true;
+  shapeState.tool = state.tool;
+  shapeState.pointerId = pointerId;
+  shapeState.start = { x: clampedX, y: clampedY };
+  shapeState.current = { x: clampedX, y: clampedY };
+  shapeState.color = state.color;
+  shapeState.captureTarget = target;
+  if (target && typeof target.setPointerCapture === 'function') {
+    try {
+      target.setPointerCapture(pointerId);
+    } catch (_) {
+      shapeState.captureTarget = null;
+    }
+  }
+  renderShapePreview();
+  return true;
+}
+
+function updateShapeDrawing(x, y) {
+  if (!shapeState.active || shapeState.pointerId === null) {
+    return;
+  }
+  const maxX = Math.max(0, state.width - 1);
+  const maxY = Math.max(0, state.height - 1);
+  const clampedX = clamp(x, 0, maxX);
+  const clampedY = clamp(y, 0, maxY);
+  if (shapeState.current && shapeState.current.x === clampedX && shapeState.current.y === clampedY) {
+    return;
+  }
+  shapeState.current = { x: clampedX, y: clampedY };
+  renderShapePreview();
+}
+
+function finalizeShapeDrawing() {
+  if (!shapeState.active || !shapeState.start || !shapeState.current) {
+    cancelShapeDrawing();
+    return false;
+  }
+  const pixels = collectShapePixels(shapeState.tool, shapeState.start, shapeState.current);
+  clearShapePreview();
+  releaseShapeCapture();
+  const color = shapeState.color || state.color;
+  resetShapeState();
+  if (!pixels || pixels.size === 0) {
+    return false;
+  }
+  const applied = applyShapePixelsToLayer(pixels, color);
+  if (!applied) {
+    return false;
+  }
+  markHistoryDirty();
+  queueCompositeLayers();
+  finalizeHistoryEntry();
+  return true;
+}
+
+function cancelShapeDrawing() {
+  if (!shapeState.active) {
+    return;
+  }
+  clearShapePreview();
+  releaseShapeCapture();
+  resetShapeState();
+  renderShapePreview();
+}
+
+function addShapePixel(pixels, x, y) {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  if (!Number.isFinite(ix) || !Number.isFinite(iy)) {
+    return;
+  }
+  if (ix < 0 || ix >= state.width || iy < 0 || iy >= state.height) {
+    return;
+  }
+  pixels.add(`${ix},${iy}`);
+}
+
+function plotCirclePoints(cx, cy, x, y, add) {
+  add(cx + x, cy + y);
+  add(cx - x, cy + y);
+  add(cx + x, cy - y);
+  add(cx - x, cy - y);
+  add(cx + y, cy + x);
+  add(cx - y, cy + x);
+  add(cx + y, cy - x);
+  add(cx - y, cy - x);
+}
+
+function collectCircleOutlinePixels(cx, cy, radius, add) {
+  if (radius <= 0) {
+    add(cx, cy);
+    return;
+  }
+  let x = radius;
+  let y = 0;
+  let decision = 1 - radius;
+  while (y <= x) {
+    plotCirclePoints(cx, cy, x, y, add);
+    y += 1;
+    if (decision <= 0) {
+      decision += 2 * y + 1;
+    } else {
+      x -= 1;
+      decision += 2 * (y - x) + 1;
+    }
+  }
+}
+
+function collectCircleFillPixels(cx, cy, radius, add) {
+  if (radius <= 0) {
+    add(cx, cy);
+    return;
+  }
+  for (let offsetY = -radius; offsetY <= radius; offsetY += 1) {
+    const rowY = cy + offsetY;
+    const span = Math.floor(Math.sqrt(Math.max(0, radius * radius - offsetY * offsetY)));
+    for (let offsetX = -span; offsetX <= span; offsetX += 1) {
+      add(cx + offsetX, rowY);
+    }
+  }
+}
+
+function collectShapePixels(tool, start, current) {
+  const pixels = new Set();
+  if (!start || !current) {
+    return pixels;
+  }
+  const add = (x, y) => addShapePixel(pixels, x, y);
+  switch (tool) {
+    case 'shapeLine': {
+      drawLinePixels(start.x, start.y, current.x, current.y, (x, y) => add(x, y));
+      break;
+    }
+    case 'shapeCurve': {
+      const control = { x: start.x, y: current.y };
+      const distance = Math.max(Math.abs(current.x - start.x), Math.abs(current.y - start.y));
+      const steps = Math.max(16, distance * 4);
+      for (let i = 0; i <= steps; i += 1) {
+        const t = i / steps;
+        const inv = 1 - t;
+        const x = inv * inv * start.x + 2 * inv * t * control.x + t * t * current.x;
+        const y = inv * inv * start.y + 2 * inv * t * control.y + t * t * current.y;
+        add(x, y);
+      }
+      break;
+    }
+    case 'shapeCircle': {
+      const radius = Math.round(Math.hypot(current.x - start.x, current.y - start.y));
+      collectCircleOutlinePixels(start.x, start.y, radius, add);
+      break;
+    }
+    case 'shapeCircleFill': {
+      const radius = Math.round(Math.hypot(current.x - start.x, current.y - start.y));
+      collectCircleFillPixels(start.x, start.y, radius, add);
+      break;
+    }
+    case 'shapeRect': {
+      const minX = Math.min(start.x, current.x);
+      const maxX = Math.max(start.x, current.x);
+      const minY = Math.min(start.y, current.y);
+      const maxY = Math.max(start.y, current.y);
+      for (let x = minX; x <= maxX; x += 1) {
+        add(x, minY);
+        add(x, maxY);
+      }
+      for (let y = minY + 1; y < maxY; y += 1) {
+        add(minX, y);
+        add(maxX, y);
+      }
+      break;
+    }
+    case 'shapeRectFill': {
+      const minX = Math.min(start.x, current.x);
+      const maxX = Math.max(start.x, current.x);
+      const minY = Math.min(start.y, current.y);
+      const maxY = Math.max(start.y, current.y);
+      for (let y = minY; y <= maxY; y += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          add(x, y);
+        }
+      }
+      break;
+    }
+    default: {
+      drawLinePixels(start.x, start.y, current.x, current.y, (x, y) => add(x, y));
+      break;
+    }
+  }
+  if (!pixels.size) {
+    add(start.x, start.y);
+  }
+  return pixels;
+}
+
+function applyShapePixelsToLayer(pixels, color) {
+  const layer = getActiveLayer();
+  if (!layer || !pixels || pixels.size === 0) {
+    return false;
+  }
+  const ctx = layer.ctx;
+  ctx.fillStyle = color;
+  let applied = false;
+  for (const key of pixels) {
+    const [pxStr, pyStr] = key.split(',');
+    const px = Number(pxStr);
+    const py = Number(pyStr);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      continue;
+    }
+    if (!isPixelSelected(px, py)) {
+      continue;
+    }
+    ctx.fillRect(px, py, 1, 1);
+    applied = true;
+  }
+  return applied;
+}
+
+function cloneImageData(imageData) {
+  if (!imageData || !imageData.data) {
+    return null;
+  }
+  try {
+    return new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+  } catch (error) {
+    const { canvas, ctx } = createOffscreenCanvas(imageData.width, imageData.height);
+    ctx.putImageData(imageData, 0, 0);
+    return ctx.getImageData(0, 0, imageData.width, imageData.height);
+  }
+}
+
+function cloneSnapshot(snapshot) {
+  if (!snapshot) {
+    return null;
+  }
+  return {
+    width: snapshot.width,
+    height: snapshot.height,
+    selectedId: snapshot.selectedId,
+    nextId: snapshot.nextId,
+    layers: snapshot.layers.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      visible: layer.visible,
+      opacity: layer.opacity,
+      imageData: cloneImageData(layer.imageData),
+    })),
+  };
+}
+
+function createBlankSnapshotFrom(snapshot) {
+  if (!snapshot) {
+    return null;
+  }
+  const blank = cloneSnapshot(snapshot);
+  if (!blank) {
+    return null;
+  }
+  blank.layers.forEach((layer) => {
+    if (layer.imageData) {
+      layer.imageData.data.fill(0);
+    }
+  });
+  return blank;
+}
+
+function createBlankImageData(width, height) {
+  const clampedWidth = Math.max(1, Math.floor(Number(width) || 0));
+  const clampedHeight = Math.max(1, Math.floor(Number(height) || 0));
+  try {
+    return new ImageData(clampedWidth, clampedHeight);
+  } catch (error) {
+    const { ctx: offscreenCtx } = createOffscreenCanvas(clampedWidth, clampedHeight);
+    return offscreenCtx.getImageData(0, 0, clampedWidth, clampedHeight);
+  }
+}
+
+function resizeSnapshot(snapshot, nextWidth, nextHeight) {
+  if (!snapshot || !Array.isArray(snapshot.layers)) {
+    return;
+  }
+  const width = Math.max(1, Math.floor(Number(nextWidth) || 0));
+  const height = Math.max(1, Math.floor(Number(nextHeight) || 0));
+  if (width === snapshot.width && height === snapshot.height) {
+    return;
+  }
+  snapshot.width = width;
+  snapshot.height = height;
+  snapshot.layers.forEach((layer) => {
+    if (!layer) {
+      return;
+    }
+    const { canvas, ctx: resizeCtx } = createOffscreenCanvas(width, height);
+    if (layer.imageData instanceof ImageData) {
+      try {
+        resizeCtx.putImageData(layer.imageData, 0, 0);
+      } catch (error) {
+        console.warn('フレームスナップショットのリサイズに失敗しました', error);
+      }
+    }
+    layer.imageData = resizeCtx.getImageData(0, 0, width, height);
+  });
+}
+
+function syncFrameSnapshotsWithCurrentLayers() {
+  if (isRestoringState) {
+    return;
+  }
+  const orderedLayers = layersState.layers.slice();
+  framesState.frames.forEach((frame) => {
+    const snapshot = frame.snapshot;
+    if (!snapshot || !Array.isArray(snapshot.layers)) {
+      return;
+    }
+    const width = Math.max(1, Math.floor(Number(snapshot.width) || state.width));
+    const height = Math.max(1, Math.floor(Number(snapshot.height) || state.height));
+    const existing = new Map(snapshot.layers.map((layer) => [layer.id, layer]));
+    const updated = [];
+    orderedLayers.forEach((layer) => {
+      let layerSnapshot = existing.get(layer.id);
+      if (!layerSnapshot) {
+        layerSnapshot = {
+          id: layer.id,
+          name: layer.name,
+          visible: layer.visible,
+          opacity: layer.opacity,
+          imageData: createBlankImageData(width, height),
+        };
+      } else {
+        layerSnapshot.name = layer.name;
+        layerSnapshot.visible = layer.visible;
+        layerSnapshot.opacity = layer.opacity;
+      }
+      updated.push(layerSnapshot);
+    });
+    snapshot.layers = updated;
+    const selectedExists = updated.some((layer) => layer.id === layersState.selectedId);
+    snapshot.selectedId = selectedExists ? layersState.selectedId : updated[0]?.id || null;
+    snapshot.nextId = Math.max(layersState.nextId, updated.length + 1);
+    frame.layerContent = computeFrameLayerContent(snapshot);
+  });
+}
+
+function createFrameFromSnapshot(snapshot, name = null) {
+  const idNumber = framesState.nextId;
+  framesState.nextId += 1;
+  const cloned = cloneSnapshot(snapshot);
+  return {
+    id: `frame-${idNumber}`,
+    name: name || `フレーム${idNumber}`,
+    snapshot: cloned,
+    layerContent: computeFrameLayerContent(cloned),
+  };
+}
+
+function getFrameById(frameId) {
+  return framesState.frames.find((frame) => frame.id === frameId) || null;
+}
+
+function getFrameNumericId(frameId) {
+  if (typeof frameId !== 'string') {
+    return NaN;
+  }
+  const match = frameId.match(/frame-(\d+)/);
+  return match ? Number(match[1]) : NaN;
+}
+
+function initFrames() {
+  framesState.frames.forEach((frame) => {
+    if (!frame.layerContent) {
+      frame.layerContent = computeFrameLayerContent(frame.snapshot);
+    }
+  });
+  if (framesState.frames.length === 0) {
+    const snapshot = captureHistorySnapshot();
+    const frame = createFrameFromSnapshot(snapshot);
+    framesState.frames.push(frame);
+    framesState.activeId = frame.id;
+  } else if (!framesState.activeId) {
+    framesState.activeId = framesState.frames[0].id;
+  }
+}
+
+function saveCurrentFrame(snapshotOverride = null) {
+  if (!framesState.activeId) {
+    return;
+  }
+  const frame = getFrameById(framesState.activeId);
+  if (!frame) {
+    return;
+  }
+  const snapshot = snapshotOverride || captureHistorySnapshot();
+  frame.snapshot = cloneSnapshot(snapshot);
+  frame.layerContent = computeFrameLayerContent(frame.snapshot);
+}
+
+function addFrame(options = {}) {
+  initFrames();
+  const { duplicate = true } = options;
+  saveCurrentFrame();
+  const currentSnapshot = captureHistorySnapshot();
+  const baseSnapshot = duplicate ? currentSnapshot : createBlankSnapshotFrom(currentSnapshot);
+  const frame = createFrameFromSnapshot(baseSnapshot);
+  framesState.frames.push(frame);
+  framesState.activeId = frame.id;
+  applyHistorySnapshot(frame.snapshot);
+  resetHistory();
+  saveCurrentFrame();
+  renderLayerList();
+  updateLayerDockStatus();
+  flashDock('toolDock');
+  scheduleDockAutoHide();
+}
+
+function selectFrame(frameId) {
+  if (!frameId || frameId === framesState.activeId) {
+    return;
+  }
+  initFrames();
+  saveCurrentFrame();
+  const frame = getFrameById(frameId);
+  if (!frame || !frame.snapshot) {
+    return;
+  }
+  framesState.activeId = frameId;
+  applyHistorySnapshot(frame.snapshot);
+  resetHistory();
+  saveCurrentFrame();
+  renderLayerList();
+  updateLayerDockStatus();
 }
 
 function clampSelectionOffset(offsetX, offsetY) {
@@ -1771,11 +2774,13 @@ function strokeSelectionPath(drawPath, lineJoin = 'miter', lineCap = 'square') {
 }
 
 function getSelectionOutlineThickness() {
-  return SELECTION_OUTLINE_THICKNESS_PX;
+  const zoom = Math.max(state.zoom || 1, 0.01);
+  return SELECTION_OUTLINE_THICKNESS_PX / zoom;
 }
 
 function getSelectionDashLength() {
-  return SELECTION_DASH_LENGTH_PX;
+  const zoom = Math.max(state.zoom || 1, 0.01);
+  return SELECTION_DASH_LENGTH_PX / zoom;
 }
 
 function drawRectSelectionPreview() {
@@ -1825,7 +2830,7 @@ function drawLassoSelectionPreview() {
   strokeSelectionPath(drawOutlinePath, 'round', 'round');
 }
 
-function renderSelectionOverlay() {
+function renderSelectionOverlayImmediate() {
   if (!selectionOutlineCtx) {
     initSelectionOverlay();
   }
@@ -1850,6 +2855,25 @@ function renderSelectionOverlay() {
     ensureSelectionAnimation();
   } else {
     stopSelectionAnimation();
+  }
+  overlayDirty = false;
+}
+
+function renderSelectionOverlay() {
+  overlayDirty = true;
+  if (typeof window === 'undefined') {
+    renderSelectionOverlayImmediate();
+    return;
+  }
+  if (overlayRafId === null) {
+    overlayRafId = window.requestAnimationFrame(() => {
+      overlayRafId = null;
+      if (!overlayDirty) {
+        return;
+      }
+      overlayDirty = false;
+      renderSelectionOverlayImmediate();
+    });
   }
 }
 
@@ -1877,7 +2901,7 @@ function animateSelectionBorder(timestamp) {
   if (!selectionState.active && !selectionState.isDragging) {
     selectionAnimationFrame = null;
     selectionAnimationLastTime = null;
-    renderSelectionOverlay();
+    renderSelectionOverlayImmediate();
     return;
   }
   if (selectionAnimationLastTime !== null) {
@@ -1886,7 +2910,7 @@ function animateSelectionBorder(timestamp) {
     selectionDashPhasePx = (selectionDashPhasePx + delta) % (SELECTION_DASH_LENGTH_PX * 2);
   }
   selectionAnimationLastTime = timestamp;
-  renderSelectionOverlay();
+  renderSelectionOverlayImmediate();
   if (typeof window !== 'undefined') {
     selectionAnimationFrame = window.requestAnimationFrame(animateSelectionBorder);
   }
@@ -2172,13 +3196,16 @@ function getOffsetBounds(wrapperSize, scaledSize) {
 function setZoom(value, options = {}) {
   const { fromUser = false, focus } = options;
   const minAllowed = Math.max(state.minZoom || ZOOM_LIMITS.min, ZOOM_LIMITS.min);
-  const clampedValue = clamp(value, minAllowed, ZOOM_LIMITS.max);
-  if (Math.abs(clampedValue - state.zoom) < 0.0001) {
-    return;
-  }
+  const targetZoom = clamp(value, minAllowed, ZOOM_LIMITS.max);
   const previousZoom = state.zoom;
-  state.zoom = clampedValue;
-  if (fromUser) {
+  const zoomChanged = Math.abs(targetZoom - previousZoom) >= 0.0001;
+
+  if (zoomChanged) {
+    state.zoom = targetZoom;
+    if (fromUser) {
+      userAdjustedZoom = true;
+    }
+  } else if (fromUser) {
     userAdjustedZoom = true;
   }
   if (focus) {
@@ -2188,10 +3215,10 @@ function setZoom(value, options = {}) {
       const localY = focus.y - metrics.rect.top;
       const worldX = (localX - state.offsetX) / previousZoom;
       const worldY = (localY - state.offsetY) / previousZoom;
-      const scaledWidth = state.width * state.pixelSize * clampedValue;
-      const scaledHeight = state.height * state.pixelSize * clampedValue;
-      let nextOffsetX = localX - clampedValue * worldX;
-      let nextOffsetY = localY - clampedValue * worldY;
+      const scaledWidth = state.width * state.pixelSize * state.zoom;
+      const scaledHeight = state.height * state.pixelSize * state.zoom;
+      let nextOffsetX = localX - state.zoom * worldX;
+      let nextOffsetY = localY - state.zoom * worldY;
       const { min: minOffsetX, max: maxOffsetX } = getOffsetBounds(metrics.rect.width, scaledWidth);
       const { min: minOffsetY, max: maxOffsetY } = getOffsetBounds(metrics.rect.height, scaledHeight);
       nextOffsetX = clamp(nextOffsetX, minOffsetX, maxOffsetX);
@@ -2212,8 +3239,8 @@ function setZoom(value, options = {}) {
   } else if (!fromUser) {
     const metrics = getWrapperMetrics();
     if (metrics) {
-      const scaledWidth = state.width * state.pixelSize * clampedValue;
-      const scaledHeight = state.height * state.pixelSize * clampedValue;
+      const scaledWidth = state.width * state.pixelSize * state.zoom;
+      const scaledHeight = state.height * state.pixelSize * state.zoom;
       state.offsetX = (metrics.rect.width - scaledWidth) / 2;
       state.offsetY = (metrics.rect.height - scaledHeight) / 2;
     } else {
@@ -2306,6 +3333,7 @@ function updateVirtualCursorPosition(x, y, options = {}) {
     }
     if (state.tool === 'pen') {
       drawLine(prevX, prevY, clampedX, clampedY, true);
+      drawVirtualCursorPreviewLine(prevX, prevY, clampedX, clampedY);
     } else if (state.tool === 'eraser') {
       drawLine(prevX, prevY, clampedX, clampedY, false);
     } else {
@@ -2313,7 +3341,7 @@ function updateVirtualCursorPosition(x, y, options = {}) {
     }
     virtualCursorState.prevDrawX = clampedX;
     virtualCursorState.prevDrawY = clampedY;
-    compositeLayers();
+    queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
     return;
   }
 }
@@ -2376,6 +3404,7 @@ function endVirtualDrawing() {
   if (isDrawing) {
     isDrawing = false;
   }
+  clearVirtualCursorPreview();
   finalizeHistoryEntry();
 }
 
@@ -2385,12 +3414,13 @@ function continueVirtualDrawing() {
   }
   if (state.tool === 'pen') {
     drawBrush(virtualCursorState.x, virtualCursorState.y);
+    extendVirtualCursorPreviewPoint(virtualCursorState.x, virtualCursorState.y);
   } else if (state.tool === 'eraser') {
     eraseBrush(virtualCursorState.x, virtualCursorState.y);
   } else {
     return;
   }
-  compositeLayers();
+  queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
 }
 
 function startVirtualDrawing() {
@@ -2398,6 +3428,7 @@ function startVirtualDrawing() {
     return;
   }
   const { x, y } = virtualCursorState;
+  clearVirtualCursorPreview();
   virtualCursorState.prevDrawX = x;
   virtualCursorState.prevDrawY = y;
   if (state.tool === 'pen' || state.tool === 'eraser' || state.tool === 'fill') {
@@ -2406,13 +3437,14 @@ function startVirtualDrawing() {
   if (state.tool === 'pen') {
     isDrawing = true;
     virtualCursorState.drawActive = true;
+    beginVirtualCursorPreviewStroke(x, y);
     drawBrush(x, y);
-    compositeLayers();
+    queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
   } else if (state.tool === 'eraser') {
     isDrawing = true;
     virtualCursorState.drawActive = true;
     eraseBrush(x, y);
-    compositeLayers();
+    queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
   } else if (state.tool === 'eyedropper') {
     const sampled = getPixelColor(x, y);
     if (sampled) {
@@ -2423,7 +3455,7 @@ function startVirtualDrawing() {
     virtualCursorState.prevDrawY = null;
   } else if (state.tool === 'fill') {
     floodFill(x, y, state.color);
-    compositeLayers();
+    queueCompositeLayers();
     virtualCursorState.drawActive = false;
     virtualCursorState.prevDrawX = null;
     virtualCursorState.prevDrawY = null;
@@ -2467,6 +3499,7 @@ function setVirtualCursorEnabled(enabled) {
       pixelCanvas.releasePointerCapture(virtualCursorState.pointerId);
     }
     endVirtualDrawing();
+    clearVirtualCursorPreview();
     virtualCursorState.pointerId = null;
     virtualCursorState.lastClientX = null;
     virtualCursorState.lastClientY = null;
@@ -3102,10 +4135,99 @@ function handleSelectionToolDocumentClick(event) {
   closeSelectionToolPanel();
 }
 
+function isShapeTool(tool) {
+  return shapeToolIds.includes(tool);
+}
+
+function getShapeToolButton(tool) {
+  return toolButtons.find((button) => button.dataset.tool === tool);
+}
+
+function getShapeToggleMeta(tool) {
+  const defaultLabel = shapeToolToggle?.dataset.defaultLabel || '図形ツール';
+  const defaultIcon = shapeToolToggle?.dataset.defaultIcon || shapeToolToggleIcon?.src || '';
+  if (!isShapeTool(tool)) {
+    return { icon: defaultIcon, label: defaultLabel };
+  }
+  const button = getShapeToolButton(tool);
+  if (!button) {
+    return { icon: defaultIcon, label: defaultLabel };
+  }
+  const icon = button.dataset.icon || button.querySelector('img')?.src || defaultIcon;
+  const label = button.getAttribute('aria-label') || button.querySelector('img')?.getAttribute('alt') || defaultLabel;
+  return { icon, label };
+}
+
+function updateShapeToolToggleState() {
+  if (!shapeToolToggle) {
+    return;
+  }
+  const shapeActive = isShapeTool(state.tool);
+  const displayTool = shapeActive ? state.tool : shapeToolToggle?.dataset.defaultTool || shapeToolIds[0];
+  const meta = getShapeToggleMeta(displayTool);
+  if (shapeToolToggleIcon && meta.icon) {
+    shapeToolToggleIcon.src = meta.icon;
+  }
+  if (shapeToolToggleIcon && meta.label) {
+    shapeToolToggleIcon.alt = meta.label;
+  }
+  const toggleLabel = meta.label || shapeToolToggle?.dataset.defaultLabel || '図形ツール';
+  shapeToolToggle.setAttribute('aria-label', toggleLabel);
+  shapeToolToggle.setAttribute('aria-pressed', shapeActive ? 'true' : 'false');
+  shapeToolToggle.setAttribute('aria-expanded', shapeToolPanelOpen ? 'true' : 'false');
+  shapeToolToggle.classList.toggle('tool-button--active', shapeActive || shapeToolPanelOpen);
+}
+
+function openShapeToolPanel() {
+  if (!shapeToolPanel || shapeToolPanelOpen) {
+    return;
+  }
+  shapeToolPanel.hidden = false;
+  shapeToolPanel.setAttribute('aria-hidden', 'false');
+  shapeToolPanelOpen = true;
+  updateShapeToolToggleState();
+}
+
+function closeShapeToolPanel() {
+  if (!shapeToolPanelOpen) {
+    return;
+  }
+  if (shapeToolPanel) {
+    shapeToolPanel.hidden = true;
+    shapeToolPanel.setAttribute('aria-hidden', 'true');
+  }
+  shapeToolPanelOpen = false;
+  updateShapeToolToggleState();
+}
+
+function toggleShapeToolPanel() {
+  if (shapeToolPanelOpen) {
+    closeShapeToolPanel();
+  } else {
+    openShapeToolPanel();
+  }
+}
+
+function handleShapeToolDocumentClick(event) {
+  if (!shapeToolPanelOpen) {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    closeShapeToolPanel();
+    return;
+  }
+  if ((shapeToolPanel && shapeToolPanel.contains(target)) || (shapeToolToggle && shapeToolToggle.contains(target))) {
+    return;
+  }
+  closeShapeToolPanel();
+}
+
 function setActiveTool(tool) {
   if (tool !== 'pan') {
     endCanvasPan(null, { force: true });
   }
+  cancelShapeDrawing();
   state.tool = tool;
   toolButtons.forEach((button) => {
     const isActive = button.dataset.tool === tool;
@@ -3115,7 +4237,11 @@ function setActiveTool(tool) {
   if (!isSelectionTool(tool)) {
     closeSelectionToolPanel();
   }
+  if (!isShapeTool(tool)) {
+    closeShapeToolPanel();
+  }
   updateSelectionToolToggleState();
+  updateShapeToolToggleState();
   updateToolDockStatus();
   updatePanCursorState();
   flashDock('toolDock');
@@ -4727,6 +5853,7 @@ function positionDefaultMiniDocks() {
 
 function handleMiniDockResize() {
   positionDefaultMiniDocks();
+  ensureCanvasCentered();
 }
 
 function setDockCollapsed(collapsed) {
@@ -4750,36 +5877,170 @@ function initDockDrag() {
     return;
   }
 
-  const endDrag = () => {
-    if (dockDragState.pointerId !== null && dockHandle.hasPointerCapture(dockDragState.pointerId)) {
-      dockHandle.releasePointerCapture(dockDragState.pointerId);
+  const MOVE_THRESHOLD_PX = 6;
+  let toggleDragCandidate = null;
+  let suppressToggleClick = false;
+  let windowListenersAttached = false;
+
+  const addDraggingClass = (target) => {
+    floatingDock.classList.add('floating-dock--dragging');
+    if (target === dockHandle) {
+      dockHandle.classList.add('floating-dock__handle--dragging');
+    } else if (target === dockToggle) {
+      dockToggle.classList.add('floating-dock__toggle--dragging');
     }
+  };
+
+  const removeDraggingClass = () => {
+    floatingDock.classList.remove('floating-dock--dragging');
+    dockHandle.classList.remove('floating-dock__handle--dragging');
+    dockToggle?.classList.remove('floating-dock__toggle--dragging');
+  };
+
+  const attachWindowListeners = () => {
+    if (windowListenersAttached) {
+      return;
+    }
+    window.addEventListener('pointermove', handleWindowPointerMove, { passive: false });
+    window.addEventListener('pointerup', handleWindowPointerUp);
+    window.addEventListener('pointercancel', handleWindowPointerUp);
+    windowListenersAttached = true;
+  };
+
+  const detachWindowListeners = () => {
+    if (!windowListenersAttached) {
+      return;
+    }
+    window.removeEventListener('pointermove', handleWindowPointerMove);
+    window.removeEventListener('pointerup', handleWindowPointerUp);
+    window.removeEventListener('pointercancel', handleWindowPointerUp);
+    windowListenersAttached = false;
+  };
+
+  const beginDockDrag = (event, captureTarget) => {
+    if (dockDragState.active) {
+      return;
+    }
+    const rect = floatingDock.getBoundingClientRect();
+    dockDragState.active = true;
+    dockDragState.pointerId = event.pointerId;
+    dockDragState.offsetX = event.clientX - rect.left;
+    dockDragState.offsetY = event.clientY - rect.top;
+    dockDragState.captureTarget = captureTarget || dockHandle;
+    addDraggingClass(dockDragState.captureTarget);
+    userMovedDock = true;
+    if (
+      dockDragState.captureTarget &&
+      typeof dockDragState.captureTarget.setPointerCapture === 'function'
+    ) {
+      try {
+        dockDragState.captureTarget.setPointerCapture(event.pointerId);
+      } catch (_) {
+        // noop
+      }
+    }
+    setDockPosition(event.clientX - dockDragState.offsetX, event.clientY - dockDragState.offsetY);
+  };
+
+  const finishDockDrag = (event) => {
+    if (!dockDragState.active || event.pointerId !== dockDragState.pointerId) {
+      return;
+    }
+    try {
+      const target = dockDragState.captureTarget;
+      if (target && typeof target.releasePointerCapture === 'function') {
+        target.releasePointerCapture(event.pointerId);
+      }
+    } catch (_) {
+      // noop
+    }
+    removeDraggingClass();
     dockDragState.active = false;
     dockDragState.pointerId = null;
-    dockHandle.classList.remove('floating-dock__handle--dragging');
+    dockDragState.captureTarget = null;
+  };
+
+  const handleWindowPointerMove = (event) => {
+    if (dockDragState.active && event.pointerId === dockDragState.pointerId) {
+      event.preventDefault();
+      setDockPosition(event.clientX - dockDragState.offsetX, event.clientY - dockDragState.offsetY);
+      return;
+    }
+    if (toggleDragCandidate && event.pointerId === toggleDragCandidate.pointerId) {
+      const dx = event.clientX - toggleDragCandidate.startX;
+      const dy = event.clientY - toggleDragCandidate.startY;
+      if (Math.hypot(dx, dy) > MOVE_THRESHOLD_PX) {
+        suppressToggleClick = true;
+        beginDockDrag(event, dockToggle);
+        toggleDragCandidate = null;
+        event.preventDefault();
+      }
+    }
+  };
+
+  const handleWindowPointerUp = (event) => {
+    if (dockDragState.active && event.pointerId === dockDragState.pointerId) {
+      setDockPosition(event.clientX - dockDragState.offsetX, event.clientY - dockDragState.offsetY);
+      finishDockDrag(event);
+    }
+    if (toggleDragCandidate && event.pointerId === toggleDragCandidate.pointerId) {
+      toggleDragCandidate = null;
+    }
+    detachWindowListeners();
+    if (suppressToggleClick) {
+      window.setTimeout(() => {
+        suppressToggleClick = false;
+      }, 0);
+    }
   };
 
   dockHandle.addEventListener('pointerdown', (event) => {
-    event.preventDefault();
-    dockDragState.active = true;
-    dockDragState.pointerId = event.pointerId;
-    const rect = floatingDock.getBoundingClientRect();
-    dockDragState.offsetX = event.clientX - rect.left;
-    dockDragState.offsetY = event.clientY - rect.top;
-    dockHandle.classList.add('floating-dock__handle--dragging');
-    dockHandle.setPointerCapture(event.pointerId);
-    userMovedDock = true;
-  });
-
-  dockHandle.addEventListener('pointermove', (event) => {
-    if (!dockDragState.active) {
+    if (event.pointerType === 'mouse' && event.button !== 0) {
       return;
     }
-    setDockPosition(event.clientX - dockDragState.offsetX, event.clientY - dockDragState.offsetY);
+    event.preventDefault();
+    attachWindowListeners();
+    beginDockDrag(event, dockHandle);
   });
 
-  dockHandle.addEventListener('pointerup', endDrag);
-  dockHandle.addEventListener('pointercancel', endDrag);
+  dockHandle.addEventListener('pointerup', (event) => {
+    if (dockDragState.active && event.pointerId === dockDragState.pointerId) {
+      handleWindowPointerUp(event);
+    }
+  });
+
+  dockHandle.addEventListener('pointercancel', (event) => {
+    if (dockDragState.active && event.pointerId === dockDragState.pointerId) {
+      handleWindowPointerUp(event);
+    }
+  });
+
+  if (dockToggle) {
+    dockToggle.addEventListener('pointerdown', (event) => {
+      if (floatingDock.dataset.collapsed !== 'true') {
+        toggleDragCandidate = null;
+        suppressToggleClick = false;
+        return;
+      }
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return;
+      }
+      toggleDragCandidate = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+      suppressToggleClick = false;
+      attachWindowListeners();
+    });
+
+    dockToggle.addEventListener('click', (event) => {
+      if (suppressToggleClick) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    });
+  }
 
   window.addEventListener('resize', () => {
     if (!floatingDock) {
@@ -4945,12 +6206,7 @@ function drawBrush(x, y, targetCtx = null) {
   }
 }
 
-function drawLine(x0, y0, x1, y1, usePen = true) {
-  const activeLayer = getActiveLayer();
-  if (!activeLayer) {
-    return;
-  }
-  const layerCtx = activeLayer.ctx;
+function drawLinePixels(x0, y0, x1, y1, handler) {
   const dx = Math.abs(x1 - x0);
   const dy = Math.abs(y1 - y0);
   let sx = x0 < x1 ? 1 : -1;
@@ -4961,11 +6217,7 @@ function drawLine(x0, y0, x1, y1, usePen = true) {
   let currentY = y0;
 
   while (true) {
-    if (usePen) {
-      drawBrush(currentX, currentY, layerCtx);
-    } else {
-      eraseBrush(currentX, currentY, layerCtx);
-    }
+    handler(currentX, currentY);
     if (currentX === x1 && currentY === y1) {
       break;
     }
@@ -4979,6 +6231,21 @@ function drawLine(x0, y0, x1, y1, usePen = true) {
       currentY += sy;
     }
   }
+}
+
+function drawLine(x0, y0, x1, y1, usePen = true) {
+  const activeLayer = getActiveLayer();
+  if (!activeLayer) {
+    return;
+  }
+  const layerCtx = activeLayer.ctx;
+  drawLinePixels(x0, y0, x1, y1, (currentX, currentY) => {
+    if (usePen) {
+      drawBrush(currentX, currentY, layerCtx);
+    } else {
+      eraseBrush(currentX, currentY, layerCtx);
+    }
+  });
 }
 
 function eraseBrush(x, y, targetCtx = null) {
@@ -5014,6 +6281,7 @@ function hexToUint32(hex) {
 }
 
 function floodFill(x, y, hexColor) {
+  cancelActiveFloodFill();
   const activeLayer = getActiveLayer();
   if (!activeLayer) {
     return;
@@ -5031,33 +6299,21 @@ function floodFill(x, y, hexColor) {
   if (targetColor === fillColor) {
     return;
   }
-
-  const stack = [[x, y]];
-  let filled = false;
-  while (stack.length > 0) {
-    const [cx, cy] = stack.pop();
-    if (!isPixelSelected(cx, cy)) {
-      continue;
-    }
-    const index = cy * width + cx;
-    if (pixels[index] !== targetColor) {
-      continue;
-    }
-    pixels[index] = fillColor;
-    filled = true;
-
-    if (cx > 0) stack.push([cx - 1, cy]);
-    if (cx < width - 1) stack.push([cx + 1, cy]);
-    if (cy > 0) stack.push([cx, cy - 1]);
-    if (cy < height - 1) stack.push([cx, cy + 1]);
-  }
-
-  if (!filled) {
-    return;
-  }
-
-  layerCtx.putImageData(imageData, 0, 0);
-  markHistoryDirty();
+  const stack = [x, y];
+  floodFillState.task = {
+    layerCtx,
+    imageData,
+    pixels,
+    data: imageData.data,
+    stack,
+    targetColor,
+    fillColor,
+    width,
+    height,
+    changed: false,
+    raf: null,
+  };
+  processFloodFillChunk();
 }
 
 function updateCursorInfo(x = null, y = null) {
@@ -5122,6 +6378,13 @@ function resizeCanvas(newWidth, newHeight) {
   updatePixelSize({ skipComposite: true });
   compositeLayers();
   refreshExportOptions();
+  framesState.frames.forEach((frame) => {
+    if (frame && frame.snapshot) {
+      resizeSnapshot(frame.snapshot, clampedWidth, clampedHeight);
+      frame.layerContent = computeFrameLayerContent(frame.snapshot);
+    }
+  });
+  renderLayerList();
   if (virtualCursorState.enabled) {
     updateVirtualCursorPosition(virtualCursorState.x, virtualCursorState.y);
   }
@@ -5202,6 +6465,18 @@ function handlePointerDown(event) {
   }
   const position = getPointerPosition(event);
   const { x, y, inBounds, canvasX, canvasY } = position;
+  if (isShapeTool(state.tool)) {
+    if (inBounds) {
+      const started = beginShapeDrawing(x, y, event.pointerId, pixelCanvas);
+      if (started) {
+        autoCompactAllDocks();
+        updateCursorInfo(x, y);
+      }
+    } else {
+      cancelShapeDrawing();
+    }
+    return;
+  }
   if (
     inBounds &&
     isSelectionTool(state.tool) &&
@@ -5273,13 +6548,25 @@ function handlePointerDown(event) {
 
   updateCursorInfo(x, y);
   if (state.tool !== 'eyedropper') {
-    compositeLayers();
+    if (state.tool === 'pen' || state.tool === 'eraser') {
+      queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
+    } else {
+      queueCompositeLayers();
+    }
   }
 }
 
 function handlePointerMove(event) {
   if (panState.active && event.pointerId === panState.pointerId) {
     updateCanvasPan(event);
+    return;
+  }
+  if (shapeState.active && event.pointerId === shapeState.pointerId) {
+    const position = getPointerPosition(event);
+    updateShapeDrawing(position.x, position.y);
+    if (position.inBounds) {
+      updateCursorInfo(position.x, position.y);
+    }
     return;
   }
   if (selectionState.isMoving && event.pointerId === selectionState.pointerId) {
@@ -5361,7 +6648,7 @@ function handlePointerMove(event) {
     } else if (state.tool === 'eraser') {
       eraseBrush(x, y);
     }
-    compositeLayers();
+    queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
     return;
   }
 
@@ -5371,10 +6658,15 @@ function handlePointerMove(event) {
     drawLine(previousPointer.x, previousPointer.y, x, y, false);
   }
   previousPointer = { x, y, inBounds: true };
-  compositeLayers();
+  queueCompositeLayers({ skipUIUpdate: true, skipContentCheck: true });
 }
 
 function handlePointerUp(event) {
+  let handledShape = false;
+  if (event && shapeState.active && event.pointerId === shapeState.pointerId) {
+    finalizeShapeDrawing();
+    handledShape = true;
+  }
   let handledSelection = false;
   if (event && selectionState.isMoving && event.pointerId === selectionState.pointerId) {
     finalizeSelectionMove();
@@ -5388,12 +6680,16 @@ function handlePointerUp(event) {
   if (event && event.pointerType === 'touch') {
     handleZoomPointerUp(event);
   }
+  if (handledShape) {
+    return;
+  }
   if (handledSelection) {
     return;
   }
   if (panEnded) {
     return;
   }
+  const wasDrawing = isDrawing;
   if (
     virtualCursorState.enabled &&
     event &&
@@ -5424,6 +6720,9 @@ function handlePointerUp(event) {
   activePointerId = null;
   isDrawing = false;
   previousPointer = { x: 0, y: 0, inBounds: false };
+  if (wasDrawing) {
+    queueCompositeLayers({ skipUIUpdate: false, skipContentCheck: false });
+  }
   finalizeHistoryEntry();
 }
 
@@ -5465,6 +6764,9 @@ function initEvents() {
       if (isSelectionTool(targetTool)) {
         closeSelectionToolPanel();
       }
+      if (isShapeTool(targetTool)) {
+        closeShapeToolPanel();
+      }
     });
   });
 
@@ -5474,7 +6776,14 @@ function initEvents() {
     });
   }
 
+  if (shapeToolToggle) {
+    shapeToolToggle.addEventListener('click', () => {
+      toggleShapeToolPanel();
+    });
+  }
+
   document.addEventListener('click', handleSelectionToolDocumentClick);
+  document.addEventListener('click', handleShapeToolDocumentClick);
 
   if (exportConfirmButton) {
     exportConfirmButton.addEventListener('click', () => {
@@ -5542,6 +6851,10 @@ function initEvents() {
         closeSelectionToolPanel();
         handled = true;
       }
+      if (shapeToolPanelOpen) {
+        closeShapeToolPanel();
+        handled = true;
+      }
       if (activePanel) {
         closeActivePanel();
         return;
@@ -5595,6 +6908,10 @@ async function init() {
   if (!restored) {
     initLayers();
   }
+  initFrames();
+  saveCurrentFrame();
+  renderLayerList();
+  updateLayerDockStatus();
   setActiveTool(state.tool);
   if (virtualCursorToggle) {
     virtualCursorToggle.setAttribute('aria-pressed', 'false');
@@ -5602,6 +6919,11 @@ async function init() {
   if (addLayerButton) {
     addLayerButton.addEventListener('click', () => {
       addLayer();
+    });
+  }
+  if (addFrameButton) {
+    addFrameButton.addEventListener('click', (event) => {
+      addFrame({ duplicate: !event.shiftKey });
     });
   }
   if (deleteLayerButton) {
@@ -5684,6 +7006,12 @@ async function init() {
   setPreviewVisible(previewVisible);
   resetHistory();
   queueStateSave();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('load', () => {
+    ensureCanvasCentered();
+  });
 }
 
 init();
