@@ -49,7 +49,6 @@
             </svg>
             <span class="sr-only">ドックの表示を切り替え</span>
           </button>
-          <span class="app-title">PiXiEEDraw</span>
         </div>
         <div class="floating-dock__content">
           <div class="floating-dock__group floating-dock__group--mini" id="dockMenu">
@@ -100,6 +99,25 @@
                       height="32"
                     />
                   </button>
+                  <button
+                    class="mini-button tool-button"
+                    type="button"
+                    data-toggle="shapeTools"
+                    data-default-tool="shapeLine"
+                    data-default-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nMycgeT0nMTEnIHdpZHRoPScxMCcgaGVpZ2h0PScxMCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHJ4PScxJy8+PGNpcmNsZSBjeD0nMTUuNScgY3k9JzguNScgcj0nNC41JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicvPjwvc3ZnPg=="
+                    data-default-label="図形ツール"
+                    aria-label="図形ツール"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                  >
+                    <img
+                      id="shapeToolToggleIcon"
+                      src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nMycgeT0nMTEnIHdpZHRoPScxMCcgaGVpZ2h0PScxMCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHJ4PScxJy8+PGNpcmNsZSBjeD0nMTUuNScgY3k9JzguNScgcj0nNC41JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicvPjwvc3ZnPg=="
+                      alt="図形ツール"
+                      width="32"
+                      height="32"
+                    />
+                  </button>
                   <button class="mini-button tool-button" type="button" data-tool="pan" data-icon="assets/icons/tool-pan.svg" aria-label="キャンバス移動">
                     <img src="assets/icons/tool-pan.svg" alt="キャンバス移動" width="32" height="32" />
                   </button>
@@ -109,6 +127,28 @@
                   <button class="mini-button tool-button" type="button" data-toggle="virtualCursor" data-icon="assets/icons/tool-cursor.png" aria-label="仮想カーソル">
                     <img src="assets/icons/tool-cursor.png" alt="仮想カーソル" width="32" height="32" />
                   </button>
+                </div>
+                <div class="mini-dock__selection-panel" id="shapeToolPanel" hidden aria-hidden="true">
+                  <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="図形ツール">
+                    <button class="mini-button tool-button" type="button" data-tool="shapeLine" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMjBMMjAgNCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Rya2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+" aria-label="直線">
+                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMjBMMjAgNCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Rya2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+" alt="直線" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="shapeCurve" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMTYgUTEyIDQgMjAgMTYnIGZpbGw9J25vbmUnIHN0cm9rZT0nI2ZmZmZmZicgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=" aria-label="曲線">
+                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMTYgUTEyIDQgMjAgMTYnIGZpbGw9J25vbmUnIHN0cm9rZT0nI2ZmZmZmZicgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=" alt="曲線" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="shapeCircle" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInLz48L3N2Zz4=" aria-label="円">
+                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInLz48L3N2Zz4=" alt="円" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="shapeCircleFill" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nI2ZmZmZmZicvPjwvc3ZnPg==" aria-label="円（塗りつぶし）">
+                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nI2ZmZmZmZicvPjwvc3ZnPg==" alt="円（塗りつぶし）" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="shapeRect" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicgcng9JzEnLz48L3N2Zz4=" aria-label="四角">
+                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicgcng9JzEnLz48L3N2Zz4=" alt="四角" width="32" height="32" />
+                    </button>
+                    <button class="mini-button tool-button" type="button" data-tool="shapeRectFill" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPScjZmZmZmZmJyByeD0nMScvPjwvc3ZnPg==" aria-label="四角（塗りつぶし）">
+                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPScjZmZmZmZmJyByeD0nMScvPjwvc3ZnPg==" alt="四角（塗りつぶし）" width="32" height="32" />
+                    </button>
+                  </div>
                 </div>
                 <div class="mini-dock__selection-panel" id="selectionToolPanel" hidden aria-hidden="true">
                   <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="範囲選択モード">
@@ -170,6 +210,7 @@
                 <div class="layer-dock" aria-label="レイヤー操作">
                   <div class="layer-dock__controls">
                     <button id="addLayer" class="layer-dock__control" type="button">追加</button>
+                    <button id="addFrame" class="layer-dock__control layer-dock__control--alt" type="button" title="フレームを追加 (Shiftで空のフレーム)">フレーム追加</button>
                     <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button">削除</button>
                   </div>
                   <div class="layer-dock__list" id="layerList" role="listbox" aria-label="レイヤー一覧"></div>
