@@ -26,36 +26,36 @@
         data-collapsed="true"
         style="top: 24px; left: 24px"
       >
-        <div class="floating-dock__grip">
-          <button
-            class="floating-dock__handle"
-            type="button"
-            id="dockHandle"
-            aria-label="ツールボタンを移動"
-          >
-            <span class="mini-dock__drag-line" aria-hidden="true"></span>
-          </button>
-        </div>
-        <div class="floating-dock__bar">
-          <button
-            class="floating-dock__toggle"
-            type="button"
-            id="dockToggle"
-            aria-label="ドックを展開"
-            aria-expanded="false"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M7 8.5L12 13.5L17 8.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            <span class="sr-only">ドックの表示を切り替え</span>
-          </button>
+        <div class="floating-dock__header">
+          <div class="floating-dock__bar">
+            <button
+              class="floating-dock__toggle"
+              type="button"
+              id="dockToggle"
+              aria-label="ドックを展開"
+              aria-expanded="false"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M7 8.5L12 13.5L17 8.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="sr-only">ドックの表示を切り替え</span>
+            </button>
+          </div>
+          <div class="floating-dock__grip">
+            <button
+              class="floating-dock__handle"
+              type="button"
+              id="dockHandle"
+              aria-label="ツールボタンを移動"
+            >
+              <span class="mini-dock__drag-line" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="floating-dock__help-inline"><button class="floating-dock__help" type="button" aria-label="ドックの使い方" data-help-id="dockMenu">?</button></div>
         </div>
         <div class="floating-dock__content">
           <div class="floating-dock__group floating-dock__group--mini" id="dockMenu">
             <div class="mini-dock mini-dock--tools" id="toolDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__drag" id="toolDockDrag" aria-hidden="true" title="ドラッグで移動">
-                <span class="mini-dock__drag-line"></span>
-              </div>
               <div class="mini-dock__header">
                 <button
                   class="mini-dock__status mini-dock__status-button"
@@ -65,14 +65,21 @@
                   aria-expanded="false"
                 >
                   <span class="mini-dock__status-icon">
-                    <img id="toolDockStatus" src="assets/icons/tool-pen.png" alt="選択中のツール" width="22" height="22" />
+                    <img id="toolDockStatus" src="assets/icons/tool-pen-new.svg" alt="選択中のツール" width="22" height="22" />
                   </span>
                 </button>
+                <div class="mini-dock__drag" id="toolDockDrag" aria-hidden="true" title="ドラッグで移動">
+                  <span class="mini-dock__drag-line"></span>
+                </div>
+                <div class="mini-dock__help-inline"><button class="mini-dock__help" type="button" aria-label="ツールボックスの使い方" data-help-id="toolDock">?</button></div>
               </div>
               <div class="mini-dock__body">
                 <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="描画ツール">
-                  <button class="mini-button tool-button tool-button--active" type="button" data-tool="pen" data-icon="assets/icons/tool-pen.png" aria-label="ペン">
-                    <img src="assets/icons/tool-pen.png" alt="ペン" width="32" height="32" />
+                  <button class="mini-button tool-button tool-button--active" type="button" data-tool="pen" data-icon="assets/icons/tool-pen-new.svg" aria-label="ペン">
+                    <img src="assets/icons/tool-pen-new.svg" alt="ペン" width="32" height="32" />
+                  </button>
+                  <button class="mini-button tool-button" type="button" data-tool="pencil" data-icon="assets/icons/tool-pencil.png" aria-label="鉛筆">
+                    <img src="assets/icons/tool-pencil.png" alt="鉛筆" width="32" height="32" />
                   </button>
                   <button class="mini-button tool-button" type="button" data-tool="eraser" data-icon="assets/icons/tool-eraser.png" aria-label="消しゴム">
                     <img src="assets/icons/tool-eraser.png" alt="消しゴム" width="32" height="32" />
@@ -173,9 +180,6 @@
               </div>
             </div>
             <div class="mini-dock mini-dock--palette" id="paletteDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__drag" id="paletteDockDrag" aria-hidden="true" title="ドラッグで移動">
-                <span class="mini-dock__drag-line"></span>
-              </div>
               <div class="mini-dock__header">
                 <button
                   class="mini-dock__status mini-dock__status-button"
@@ -184,17 +188,17 @@
                   aria-label="カラーパレットを展開"
                   aria-expanded="false"
                 >
-                  <span class="mini-dock__status-color" id="paletteDockStatus" style="background-color: #58c4ff"></span>
+                  <span class="mini-dock__status-color" id="paletteDockStatus" style="--swatch-color: #58c4ff"></span>
                 </button>
+                <div class="mini-dock__drag" id="paletteDockDrag" aria-hidden="true" title="ドラッグで移動">
+                  <span class="mini-dock__drag-line"></span>
+                </div>
               </div>
               <div class="mini-dock__body">
                 <div class="mini-dock__grid mini-dock__grid--palette swatch-grid" id="palette" role="grid" aria-label="カラーパレット"></div>
               </div>
             </div>
             <div class="mini-dock mini-dock--layers" id="layerDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__drag" id="layerDockDrag" aria-hidden="true" title="ドラッグで移動">
-                <span class="mini-dock__drag-line"></span>
-              </div>
               <div class="mini-dock__header">
                 <button
                   class="mini-dock__status mini-dock__status-button"
@@ -205,22 +209,38 @@
                 >
                   <span class="mini-dock__status-text" id="layerDockStatus">レイヤー1</span>
                 </button>
+                <div class="mini-dock__drag" id="layerDockDrag" aria-hidden="true" title="ドラッグで移動">
+                  <span class="mini-dock__drag-line"></span>
+                </div>
               </div>
               <div class="mini-dock__body">
-                <div class="layer-dock" aria-label="レイヤー操作">
+                <div class="layer-dock" aria-label="レイヤー操作" data-layer-dock>
                   <div class="layer-dock__controls">
-                    <button id="addLayer" class="layer-dock__control" type="button">追加</button>
-                    <button id="addFrame" class="layer-dock__control layer-dock__control--alt" type="button" title="フレームを追加 (Shiftで空のフレーム)">フレーム追加</button>
-                    <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button">削除</button>
+                    <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button">レイヤー削除</button>
+                    <button
+                      id="deleteFrame"
+                      class="layer-dock__control layer-dock__control--danger"
+                      type="button"
+                      title="現在のフレームを削除"
+                    >
+                      フレーム削除
+                    </button>
+                    <button
+                      id="togglePlayback"
+                      class="layer-dock__control layer-dock__control--compact"
+                      type="button"
+                      aria-pressed="false"
+                      title="フレームを再生"
+                    >
+                      <span aria-hidden="true">▶</span><span class="sr-only">再生</span>
+                    </button>
                   </div>
+                  <button class="layer-dock__add-layer" type="button" data-action="addLayer" aria-label="レイヤーを追加">+レイヤー</button>
                   <div class="layer-dock__list" id="layerList" role="listbox" aria-label="レイヤー一覧"></div>
                 </div>
               </div>
             </div>
             <div class="mini-dock mini-dock--canvas" id="canvasDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__drag" id="canvasDockDrag" aria-hidden="true" title="ドラッグで移動">
-                <span class="mini-dock__drag-line"></span>
-              </div>
               <div class="mini-dock__header">
                 <button
                   class="mini-dock__status mini-dock__status-button"
@@ -231,18 +251,28 @@
                 >
                   <span class="mini-dock__status-text" id="canvasDockStatus">32×32</span>
                 </button>
+                <div class="mini-dock__drag" id="canvasDockDrag" aria-hidden="true" title="ドラッグで移動">
+                  <span class="mini-dock__drag-line"></span>
+                </div>
               </div>
               <div class="mini-dock__body">
                 <div class="mini-dock__form" aria-label="キャンバス設定">
-                  <input id="pixelSize" type="hidden" value="20" />
+                  <label class="mini-field">
+                    <span>ドットサイズ</span>
+                    <input id="pixelSize" type="number" value="1" min="1" max="32" step="1" />
+                  </label>
                   <label class="mini-field">
                     <span>横幅</span>
-                    <input id="canvasWidth" type="number" value="32" min="8" max="128" />
+                    <input id="canvasWidth" type="number" value="32" min="8" max="512" />
                   </label>
                   <label class="mini-field">
                     <span>縦幅</span>
-                    <input id="canvasHeight" type="number" value="32" min="8" max="128" />
+                    <input id="canvasHeight" type="number" value="32" min="8" max="512" />
                   </label>
+                  <div class="mini-field mini-field--inline">
+                    <span>メモリ使用量</span>
+                    <span id="memoryUsage" class="mini-value">--</span>
+                  </div>
                   <button id="resizeCanvas" class="mini-dock__apply" type="button">サイズ反映</button>
                 </div>
               </div>
@@ -325,7 +355,7 @@
 
     <div class="floating-panel" id="exportPanel" role="dialog" aria-modal="true" aria-labelledby="exportPanelTitle" hidden>
       <div class="floating-panel__header">
-        <h2 id="exportPanelTitle">PNG 書き出し</h2>
+        <h2 id="exportPanelTitle">書き出し</h2>
         <button class="floating-panel__close" type="button" data-panel-close aria-label="閉じる">×</button>
       </div>
       <div class="floating-panel__body">
@@ -338,6 +368,15 @@
           <small class="field-help" id="exportHint">最大解像度は 1024px までです。</small>
         </div>
         <button id="confirmExport" class="button button--block" type="button">PNG を保存</button>
+        <button
+          id="confirmExportGif"
+          class="button button--block button--secondary"
+          type="button"
+          hidden
+        >
+          GIF を保存
+        </button>
+        <small class="field-help" id="exportGifHint" hidden>複数フレームがある場合に GIF を書き出せます。</small>
       </div>
     </div>
 
