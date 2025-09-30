@@ -1,7 +1,51 @@
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M10 22L22 10" stroke="#F5F5F5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M18 8L19.5 4.5L23 6" stroke="#F5F5F5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M24 18L27.5 19.5L26 23" stroke="#F5F5F5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12 24L8.5 25.5L7 22" stroke="#F5F5F5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12 12L20 20" stroke="#58C4FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<?xml version="1.0" encoding="UTF-8" ?>
+<svg version="1.1" width="21" height="21" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">
+<rect x="1" y="1" width="1" height="1" fill="#FFFFFF" />
+<rect x="3" y="1" width="2" height="1" fill="#FFFFFF" />
+<rect x="6" y="1" width="7" height="1" fill="#FFFFFF" />
+<rect x="14" y="1" width="2" height="1" fill="#FFFFFF" />
+<rect x="17" y="1" width="3" height="1" fill="#FFFFFF" />
+<rect x="14" y="2" width="1" height="2" fill="#FFFFFF" />
+<rect x="16" y="2" width="1" height="1" fill="#FFFFFF" />
+<rect x="19" y="2" width="1" height="2" fill="#FFFFFF" />
+<rect x="4" y="3" width="1" height="1" fill="#FFFFFF" />
+<rect x="7" y="3" width="5" height="1" fill="#FFFFFF" />
+<rect x="13" y="3" width="1" height="1" fill="#FFFFFF" />
+<rect x="12" y="4" width="1" height="2" fill="#FFFFFF" />
+<rect x="18" y="4" width="1" height="1" fill="#FFFFFF" />
+<rect x="9" y="5" width="2" height="1" fill="#FFFFFF" />
+<rect x="13" y="5" width="2" height="1" fill="#FFFFFF" />
+<rect x="19" y="5" width="1" height="2" fill="#FFFFFF" />
+<rect x="13" y="6" width="1" height="1" fill="#FFFFFF" />
+<rect x="15" y="6" width="1" height="3" fill="#FFFFFF" />
+<rect x="17" y="6" width="2" height="1" fill="#FFFFFF" />
+<rect x="12" y="7" width="1" height="1" fill="#FFFFFF" />
+<rect x="14" y="7" width="1" height="1" fill="#FFFFFF" />
+<rect x="17" y="7" width="1" height="1" fill="#FFFFFF" />
+<rect x="11" y="8" width="1" height="1" fill="#FFFFFF" />
+<rect x="13" y="8" width="1" height="1" fill="#FFFFFF" />
+<rect x="16" y="8" width="1" height="1" fill="#FFFFFF" />
+<rect x="10" y="9" width="1" height="1" fill="#FFFFFF" />
+<rect x="12" y="9" width="1" height="1" fill="#FFFFFF" />
+<rect x="9" y="10" width="1" height="1" fill="#FFFFFF" />
+<rect x="11" y="10" width="1" height="1" fill="#FFFFFF" />
+<rect x="18" y="10" width="1" height="1" fill="#FFFFFF" />
+<rect x="8" y="11" width="1" height="1" fill="#FFFFFF" />
+<rect x="10" y="11" width="1" height="1" fill="#FFFFFF" />
+<rect x="7" y="12" width="1" height="4" fill="#FFFFFF" />
+<rect x="9" y="12" width="1" height="1" fill="#FFFFFF" />
+<rect x="5" y="13" width="2" height="1" fill="#FFFFFF" />
+<rect x="8" y="13" width="1" height="1" fill="#FFFFFF" />
+<rect x="15" y="13" width="1" height="1" fill="#FFFFFF" />
+<rect x="4" y="14" width="1" height="1" fill="#FFFFFF" />
+<rect x="14" y="14" width="1" height="1" fill="#FFFFFF" />
+<rect x="16" y="14" width="1" height="1" fill="#FFFFFF" />
+<rect x="3" y="15" width="1" height="1" fill="#FFFFFF" />
+<rect x="15" y="15" width="1" height="1" fill="#FFFFFF" />
+<rect x="1" y="16" width="2" height="1" fill="#FFFFFF" />
+<rect x="6" y="16" width="1" height="1" fill="#FFFFFF" />
+<rect x="1" y="17" width="1" height="3" fill="#FFFFFF" />
+<rect x="5" y="17" width="1" height="1" fill="#FFFFFF" />
+<rect x="4" y="18" width="1" height="2" fill="#FFFFFF" />
+<rect x="2" y="19" width="2" height="1" fill="#FFFFFF" />
 </svg>
