@@ -351,6 +351,8 @@ const virtualCursorState = {
   prevDrawY: null,
   visualX: Math.floor(state.width / 2) + 0.5,
   visualY: Math.floor(state.height / 2) + 0.5,
+  preferredEnabled: true,
+  zoomTemporarilyDisabled: false,
 };
 
 let virtualCursorElement = null;
@@ -499,7 +501,8 @@ const previewDragState = {
 };
 let previewVisible = false;
 
-const DOCK_MENU_DRAG_THRESHOLD = 6;
+const DOCK_MENU_DRAG_THRESHOLD = 14;
+const DOCK_MENU_LONG_PRESS_MS = 250;
 const dockMenuDragState = {
   active: false,
   pointerId: null,
@@ -507,11 +510,16 @@ const dockMenuDragState = {
   sourceElement: null,
   startX: 0,
   startY: 0,
+  startTime: 0,
   dragging: false,
   hasGrabOffset: false,
   grabOffsetX: 0,
   grabOffsetY: 0,
   overFloatingDock: false,
+  lastClientX: 0,
+  lastClientY: 0,
+  suppressClick: false,
+  longPressTimer: null,
 };
 const dockMenuPlaceholder = document.createElement('div');
 dockMenuPlaceholder.className = 'mini-dock mini-dock--placeholder';
@@ -2906,6 +2914,30 @@ function updateVirtualCursorIcon(tool = state.tool) {
   }
 }
 
+function temporarilyDisableVirtualCursorForZoom() {
+  if (!HAS_TOUCH_SUPPORT) {
+    return;
+  }
+  if (!virtualCursorState.enabled || virtualCursorState.zoomTemporarilyDisabled) {
+    return;
+  }
+  virtualCursorState.zoomTemporarilyDisabled = true;
+  setVirtualCursorEnabled(false, { temporary: true });
+}
+
+function restoreVirtualCursorAfterZoom() {
+  if (!HAS_TOUCH_SUPPORT) {
+    return;
+  }
+  if (!virtualCursorState.zoomTemporarilyDisabled) {
+    return;
+  }
+  virtualCursorState.zoomTemporarilyDisabled = false;
+  if (virtualCursorState.preferredEnabled) {
+    setVirtualCursorEnabled(true, { temporary: true });
+  }
+}
+
 function clearSelectionContentCanvas() {
   if (!selectionContentCtx || !selectionContentCanvas) {
     return;
@@ -4974,8 +5006,13 @@ function startVirtualDrawing() {
   }
 }
 
-function setVirtualCursorEnabled(enabled) {
+function setVirtualCursorEnabled(enabled, options = {}) {
+  const { temporary = false } = options;
   const shouldEnable = Boolean(enabled);
+  if (!temporary) {
+    virtualCursorState.preferredEnabled = shouldEnable;
+    virtualCursorState.zoomTemporarilyDisabled = false;
+  }
   if (virtualCursorState.enabled === shouldEnable) {
     return;
   }
@@ -4983,7 +5020,7 @@ function setVirtualCursorEnabled(enabled) {
   if (!virtualCursorElement || !virtualDrawControl) {
     initVirtualCursorUI();
   }
-  if (virtualCursorToggle) {
+  if (virtualCursorToggle && !temporary) {
     virtualCursorToggle.classList.toggle('tool-button--active', shouldEnable);
     virtualCursorToggle.setAttribute('aria-pressed', shouldEnable ? 'true' : 'false');
   }
@@ -5004,7 +5041,9 @@ function setVirtualCursorEnabled(enabled) {
   } else {
     clearVirtualCursorPreview({ includeHover: true });
   }
-  flashDock('toolDock');
+  if (!temporary) {
+    flashDock('toolDock');
+  }
   if (!shouldEnable) {
     if (
       virtualCursorState.pointerId !== null &&
@@ -5036,8 +5075,13 @@ function setVirtualCursorEnabled(enabled) {
   virtualCursorState.residualDY = 0;
   virtualCursorState.prevDrawX = null;
   virtualCursorState.prevDrawY = null;
-  updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: HAS_TOUCH_SUPPORT ? false : true });
-  ensureVirtualControlPosition();
+  if (!temporary) {
+    updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: HAS_TOUCH_SUPPORT ? false : true });
+    ensureVirtualControlPosition();
+  } else {
+    updateVirtualCursorVisualPosition();
+  }
+  updateVirtualCursorIcon();
   if (!HAS_TOUCH_SUPPORT) {
     setDesktopVirtualCursorActive(false);
     showCanvasCursor();
@@ -5474,10 +5518,20 @@ function handleWheelZoom(event) {
 }
 
 function handleZoomPointerDown(event) {
-  if (event.pointerType !== 'touch' || virtualCursorState.enabled) {
+  if (event.pointerType !== 'touch') {
     return;
   }
   zoomPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (virtualCursorState.enabled) {
+    if (zoomPointers.size >= 2) {
+      temporarilyDisableVirtualCursorForZoom();
+    } else {
+      return;
+    }
+  }
+  if (virtualCursorState.enabled) {
+    return;
+  }
   if (zoomPointers.size === 2) {
     if (panState.active) {
       endCanvasPan(null, { force: true });
@@ -5551,6 +5605,9 @@ function handleZoomPointerUp(event) {
       applyCanvasZoom();
       updatePanCursorState();
     }
+  }
+  if (zoomPointers.size === 0) {
+    restoreVirtualCursorAfterZoom();
   }
 }
 
@@ -7332,14 +7389,25 @@ function makeDockDraggable(dockElement, handleElement) {
   if (!dockElement || !handleElement) {
     return;
   }
+
+  const DRAG_THRESHOLD_MOUSE = 6;
+  const DRAG_THRESHOLD_TOUCH = 12;
+  const DRAG_LONG_PRESS_MS = 250;
+
   const dragState = {
     active: false,
+    dragging: false,
     pointerId: null,
     offsetX: 0,
     offsetY: 0,
     identifier: null,
     overFloatingDock: false,
     captureTarget: null,
+    startX: 0,
+    startY: 0,
+    startTime: 0,
+    suppressClick: false,
+    longPressTimer: null,
   };
 
   const clampPosition = (left, top) => {
@@ -7372,35 +7440,25 @@ function makeDockDraggable(dockElement, handleElement) {
 
   dockElement.__ensureWithinBounds = ensureWithinBounds;
 
-  const handleDockPointerMove = (event) => {
-    if (!dragState.active || event.pointerId !== dragState.pointerId) {
-      return;
+  const clearLongPressTimer = () => {
+    if (dragState.longPressTimer !== null) {
+      window.clearTimeout(dragState.longPressTimer);
+      dragState.longPressTimer = null;
     }
-    event.preventDefault();
-    clampPosition(event.clientX - dragState.offsetX, event.clientY - dragState.offsetY);
-    const overMenu = updateDockMenuPlaceholderPosition(dragState.identifier, event.clientX, event.clientY);
-    dragState.overFloatingDock = overMenu;
-    setFloatingDockReceiving(overMenu);
   };
 
-  const startDrag = (event, captureTarget = handleElement) => {
-    if (dragState.active) {
+  const beginDragInteraction = (event) => {
+    if (!dragState.active || dragState.dragging) {
       return;
     }
-    if (event.pointerType === 'mouse' && event.button !== 0) {
-      return;
-    }
-    event.preventDefault();
-    ensureWithinBounds();
-    const rect = dockElement.getBoundingClientRect();
-    dragState.active = true;
-    dragState.pointerId = event.pointerId;
-    dragState.offsetX = event.clientX - rect.left;
-    dragState.offsetY = event.clientY - rect.top;
-    dragState.captureTarget = captureTarget || handleElement;
+    dragState.dragging = true;
+    dragState.suppressClick = true;
+    clearLongPressTimer();
+
     handleElement.classList.add('mini-dock__drag--dragging');
     dockElement.classList.add('mini-dock--dragging');
-    const identifier = getDockIdentifierFromElement(dockElement);
+
+    const identifier = dragState.identifier || getDockIdentifierFromElement(dockElement);
     dragState.identifier = identifier;
     if (identifier) {
       clearDockFade(identifier);
@@ -7411,9 +7469,11 @@ function makeDockDraggable(dockElement, handleElement) {
       updateDockMenuMargin();
       updateDockStateControls(identifier);
     }
+
     dockElement.style.zIndex = '260';
     hideDockMenuPlaceholder();
     clearDockAutoHideTimer();
+
     const target = dragState.captureTarget;
     if (target && typeof target.setPointerCapture === 'function') {
       try {
@@ -7422,62 +7482,154 @@ function makeDockDraggable(dockElement, handleElement) {
         // noop
       }
     }
-    window.addEventListener('pointermove', handleDockPointerMove, { passive: false });
-    window.addEventListener('pointerup', endDrag, { once: false });
-    window.addEventListener('pointercancel', endDrag, { once: false });
+
   };
 
-  const endDrag = (event) => {
+  const handleDockPointerMove = (event) => {
     if (!dragState.active || event.pointerId !== dragState.pointerId) {
       return;
     }
-    dragState.active = false;
-    dragState.pointerId = null;
-    handleElement.classList.remove('mini-dock__drag--dragging');
-    dockElement.classList.remove('mini-dock--dragging');
-    try {
-      const target = dragState.captureTarget;
-      if (target && typeof target.releasePointerCapture === 'function') {
-        target.releasePointerCapture(event.pointerId);
+
+    const deltaX = event.clientX - dragState.startX;
+    const deltaY = event.clientY - dragState.startY;
+    const distance = Math.hypot(deltaX, deltaY);
+    const elapsed = performance.now() - dragState.startTime;
+
+    if (!dragState.dragging) {
+      const threshold = event.pointerType === 'touch' ? DRAG_THRESHOLD_TOUCH : DRAG_THRESHOLD_MOUSE;
+      if (event.pointerType === 'touch') {
+        if (dragState.longPressTimer === null && distance < threshold && elapsed < DRAG_LONG_PRESS_MS) {
+          return;
+        }
+        if (dragState.longPressTimer !== null && elapsed >= DRAG_LONG_PRESS_MS) {
+          clearLongPressTimer();
+        }
       }
-    } catch (_) {
-      // noop
+      if (distance >= threshold || event.pointerType !== 'touch' || dragState.longPressTimer === null) {
+        beginDragInteraction(event);
+      } else {
+        return;
+      }
     }
-    dragState.captureTarget = null;
-    const identifier = dragState.identifier || getDockIdentifierFromElement(dockElement);
-    if (dragState.overFloatingDock && identifier) {
-      setDockVisibility(identifier, false);
-      if (Object.prototype.hasOwnProperty.call(miniDockUserMoved, identifier)) {
-        miniDockUserMoved[identifier] = false;
-      }
-    } else {
-      snapDockToEdges(dockElement);
-      const rect = dockElement.getBoundingClientRect();
-      if (identifier) {
-        dockLastPositions[identifier] = { left: rect.left, top: rect.top };
-      }
-      scheduleDockAutoHide();
+
+    event.preventDefault();
+    clampPosition(event.clientX - dragState.offsetX, event.clientY - dragState.offsetY);
+    const overMenu = updateDockMenuPlaceholderPosition(dragState.identifier, event.clientX, event.clientY);
+    dragState.overFloatingDock = overMenu;
+    setFloatingDockReceiving(overMenu);
+  };
+
+  const finishDrag = (event) => {
+    if (dragState.pointerId === null || event.pointerId !== dragState.pointerId) {
+      return;
     }
+
+    clearLongPressTimer();
+
+    const wasDragging = dragState.dragging;
+
+    if (dragState.captureTarget && typeof dragState.captureTarget.releasePointerCapture === 'function') {
+      try {
+        dragState.captureTarget.releasePointerCapture(event.pointerId);
+      } catch (_) {
+        // noop
+      }
+    }
+
+    if (wasDragging) {
+      handleElement.classList.remove('mini-dock__drag--dragging');
+      dockElement.classList.remove('mini-dock--dragging');
+      const identifier = dragState.identifier || getDockIdentifierFromElement(dockElement);
+      if (dragState.overFloatingDock && identifier) {
+        setDockVisibility(identifier, false);
+        if (Object.prototype.hasOwnProperty.call(miniDockUserMoved, identifier)) {
+          miniDockUserMoved[identifier] = false;
+        }
+      } else {
+        snapDockToEdges(dockElement);
+        const rect = dockElement.getBoundingClientRect();
+        if (identifier) {
+          dockLastPositions[identifier] = { left: rect.left, top: rect.top };
+        }
+        scheduleDockAutoHide();
+      }
+      maybeRestoreDockMenuCollapse();
+    }
+
     setFloatingDockReceiving(false);
     hideDockMenuPlaceholder();
     dockElement.style.zIndex = '';
-    dragState.identifier = null;
     window.removeEventListener('pointermove', handleDockPointerMove);
-    window.removeEventListener('pointerup', endDrag);
-    window.removeEventListener('pointercancel', endDrag);
+    window.removeEventListener('pointerup', finishDrag);
+    window.removeEventListener('pointercancel', finishDrag);
+
+    dragState.active = false;
+    dragState.dragging = false;
+    dragState.pointerId = null;
+    dragState.captureTarget = null;
+    dragState.identifier = null;
     dragState.overFloatingDock = false;
-    maybeRestoreDockMenuCollapse();
+    dragState.suppressClick = wasDragging;
   };
 
-  handleElement.addEventListener('pointerdown', (event) => {
+  const startDrag = (event, captureTarget = handleElement) => {
+    if (dragState.active || dragState.suppressClick) {
+      return;
+    }
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
     if (dockElement.dataset.visible !== 'true') {
       return;
     }
+
+    event.preventDefault();
+    ensureWithinBounds();
+
+    const rect = dockElement.getBoundingClientRect();
+    dragState.active = true;
+    dragState.dragging = false;
+    dragState.pointerId = event.pointerId;
+    dragState.captureTarget = captureTarget || handleElement;
+    dragState.offsetX = event.clientX - rect.left;
+    dragState.offsetY = event.clientY - rect.top;
+    dragState.startX = event.clientX;
+    dragState.startY = event.clientY;
+    dragState.startTime = performance.now();
+    dragState.identifier = getDockIdentifierFromElement(dockElement);
+    dragState.overFloatingDock = false;
+    dragState.suppressClick = false;
+
+    clearLongPressTimer();
+    window.addEventListener('pointermove', handleDockPointerMove, { passive: false });
+    window.addEventListener('pointerup', finishDrag);
+    window.addEventListener('pointercancel', finishDrag);
+    if (event.pointerType === 'touch') {
+      dragState.longPressTimer = window.setTimeout(() => {
+        dragState.longPressTimer = null;
+        if (dragState.active && !dragState.dragging) {
+          beginDragInteraction({ pointerId: dragState.pointerId });
+        }
+      }, DRAG_LONG_PRESS_MS);
+    } else {
+      beginDragInteraction(event);
+    }
+  };
+
+  handleElement.addEventListener('pointerdown', (event) => {
     startDrag(event, handleElement);
   });
 
-  handleElement.addEventListener('pointerup', endDrag);
-  handleElement.addEventListener('pointercancel', endDrag);
+  handleElement.addEventListener('pointerup', finishDrag);
+  handleElement.addEventListener('pointercancel', finishDrag);
+  handleElement.addEventListener('click', (event) => {
+    if (dragState.suppressClick) {
+      event.preventDefault();
+      event.stopPropagation();
+      dragState.suppressClick = false;
+    }
+  });
+
   window.addEventListener('resize', ensureWithinBounds);
   ensureWithinBounds();
 
@@ -7496,6 +7648,9 @@ function makeDockDraggable(dockElement, handleElement) {
     }
     startDrag(event, dockElement);
   });
+
+  dockElement.addEventListener('pointerup', finishDrag);
+  dockElement.addEventListener('pointercancel', finishDrag);
 }
 
 function snapDockToEdges(dockElement) {
@@ -8235,27 +8390,44 @@ function getNextMenuSibling(identifier) {
 }
 
 function resetDockMenuDragState() {
+  if (dockMenuDragState.longPressTimer !== null) {
+    window.clearTimeout(dockMenuDragState.longPressTimer);
+    dockMenuDragState.longPressTimer = null;
+  }
   dockMenuDragState.active = false;
+  dockMenuDragState.dragging = false;
   dockMenuDragState.pointerId = null;
   dockMenuDragState.identifier = null;
   dockMenuDragState.sourceElement = null;
   dockMenuDragState.startX = 0;
   dockMenuDragState.startY = 0;
-  dockMenuDragState.dragging = false;
+  dockMenuDragState.startTime = 0;
   dockMenuDragState.hasGrabOffset = false;
   dockMenuDragState.grabOffsetX = 0;
   dockMenuDragState.grabOffsetY = 0;
   dockMenuDragState.overFloatingDock = false;
+  dockMenuDragState.lastClientX = 0;
+  dockMenuDragState.lastClientY = 0;
+  dockMenuDragState.suppressClick = false;
   hideDockMenuPlaceholder();
+  setFloatingDockReceiving(false);
+  window.removeEventListener('pointermove', handleDockMenuPointerMove);
+  window.removeEventListener('pointerup', handleDockMenuPointerUp);
+  window.removeEventListener('pointercancel', handleDockMenuPointerUp);
 }
 
 function startMenuDockDrag(event) {
   const { identifier, sourceElement } = dockMenuDragState;
-  if (!identifier || !sourceElement) {
+  if (!identifier || !sourceElement || dockMenuDragState.dragging) {
     return;
   }
-  collapseMenuDock(identifier);
   dockMenuDragState.dragging = true;
+  dockMenuDragState.suppressClick = true;
+  if (dockMenuDragState.longPressTimer !== null) {
+    window.clearTimeout(dockMenuDragState.longPressTimer);
+    dockMenuDragState.longPressTimer = null;
+  }
+  collapseMenuDock(identifier);
   dockMenuDragState.overFloatingDock = false;
   setDockVisibility(identifier, true);
   if (Object.prototype.hasOwnProperty.call(miniDockUserMoved, identifier)) {
@@ -8272,7 +8444,18 @@ function startMenuDockDrag(event) {
     dockElement.style.zIndex = '260';
   }
   hideDockMenuPlaceholder();
-  updateMenuDockDragPosition(event);
+
+  try {
+    sourceElement.setPointerCapture(dockMenuDragState.pointerId);
+  } catch (_) {
+    // noop
+  }
+
+  const clientX = event?.clientX ?? dockMenuDragState.lastClientX;
+  const clientY = event?.clientY ?? dockMenuDragState.lastClientY;
+  dockMenuDragState.lastClientX = clientX;
+  dockMenuDragState.lastClientY = clientY;
+  updateMenuDockDragPosition({ clientX, clientY });
 }
 
 function updateMenuDockDragPosition(event) {
@@ -8356,47 +8539,86 @@ function handleDockMenuPointerDown(event, identifier) {
   if (event.button !== undefined && event.button !== 0) {
     return;
   }
-  event.preventDefault();
   const dockElement = dockElements[identifier];
   if (!dockElement || dockElement.dataset.visible === 'true') {
     return;
   }
+  event.preventDefault();
+
+  resetDockMenuDragState();
+
   dockMenuDragState.active = true;
   dockMenuDragState.pointerId = event.pointerId;
   dockMenuDragState.identifier = identifier;
   dockMenuDragState.sourceElement = dockElement;
   dockMenuDragState.startX = event.clientX;
   dockMenuDragState.startY = event.clientY;
+  dockMenuDragState.startTime = performance.now();
   dockMenuDragState.dragging = false;
   const rect = dockElement.getBoundingClientRect();
   const offsetX = event.clientX - rect.left;
   const offsetY = event.clientY - rect.top;
-  dockMenuDragState.grabOffsetX = isFinite(offsetX) ? offsetX : rect.width / 2;
-  dockMenuDragState.grabOffsetY = isFinite(offsetY) ? offsetY : rect.height / 2;
+  dockMenuDragState.grabOffsetX = Number.isFinite(offsetX) ? offsetX : rect.width / 2;
+  dockMenuDragState.grabOffsetY = Number.isFinite(offsetY) ? offsetY : rect.height / 2;
   dockMenuDragState.hasGrabOffset = true;
   dockMenuDragState.overFloatingDock = false;
-  try {
-    dockElement.setPointerCapture(event.pointerId);
-  } catch (_) {
-    // ignore
-  }
+  dockMenuDragState.lastClientX = event.clientX;
+  dockMenuDragState.lastClientY = event.clientY;
+  dockMenuDragState.suppressClick = false;
+
   window.addEventListener('pointermove', handleDockMenuPointerMove, { passive: false });
   window.addEventListener('pointerup', handleDockMenuPointerUp);
   window.addEventListener('pointercancel', handleDockMenuPointerUp);
+
+  if (event.pointerType === 'touch') {
+    dockMenuDragState.longPressTimer = window.setTimeout(() => {
+      dockMenuDragState.longPressTimer = null;
+      if (dockMenuDragState.active && !dockMenuDragState.dragging) {
+        startMenuDockDrag({
+          clientX: dockMenuDragState.lastClientX,
+          clientY: dockMenuDragState.lastClientY,
+          pointerId: dockMenuDragState.pointerId,
+        });
+      }
+    }, DOCK_MENU_LONG_PRESS_MS);
+  } else {
+    startMenuDockDrag(event);
+  }
 }
 
 function handleDockMenuPointerMove(event) {
   if (!dockMenuDragState.active || event.pointerId !== dockMenuDragState.pointerId) {
     return;
   }
+
+  dockMenuDragState.lastClientX = event.clientX;
+  dockMenuDragState.lastClientY = event.clientY;
+
   const deltaX = event.clientX - dockMenuDragState.startX;
   const deltaY = event.clientY - dockMenuDragState.startY;
+  const distance = Math.hypot(deltaX, deltaY);
+  const elapsed = performance.now() - dockMenuDragState.startTime;
+
   if (!dockMenuDragState.dragging) {
-    if (Math.hypot(deltaX, deltaY) >= DOCK_MENU_DRAG_THRESHOLD) {
-      startMenuDockDrag(event);
+    if (event.pointerType === 'touch') {
+      if (dockMenuDragState.longPressTimer === null && distance < DOCK_MENU_DRAG_THRESHOLD && elapsed < DOCK_MENU_LONG_PRESS_MS) {
+        return;
+      }
+      if (dockMenuDragState.longPressTimer !== null && elapsed >= DOCK_MENU_LONG_PRESS_MS) {
+        window.clearTimeout(dockMenuDragState.longPressTimer);
+        dockMenuDragState.longPressTimer = null;
+      }
     }
+    if (distance < DOCK_MENU_DRAG_THRESHOLD && event.pointerType !== 'touch') {
+      return;
+    }
+    startMenuDockDrag(event);
+  }
+
+  if (!dockMenuDragState.dragging) {
     return;
   }
+
   event.preventDefault();
   updateMenuDockDragPosition(event);
 }
@@ -8408,23 +8630,34 @@ function handleDockMenuPointerUp(event) {
   window.removeEventListener('pointermove', handleDockMenuPointerMove);
   window.removeEventListener('pointerup', handleDockMenuPointerUp);
   window.removeEventListener('pointercancel', handleDockMenuPointerUp);
+
+  const sourceElement = dockMenuDragState.sourceElement;
   if (dockMenuDragState.dragging) {
-    event.preventDefault();
-    finishMenuDockDrag(event);
-  } else {
-    if (dockMenuDragState.sourceElement) {
+    if (sourceElement) {
       try {
-        dockMenuDragState.sourceElement.releasePointerCapture(event.pointerId);
+        sourceElement.releasePointerCapture(event.pointerId);
       } catch (_) {
         // ignore
       }
     }
-    const identifier = dockMenuDragState.identifier;
-    if (identifier) {
-      openDockFromMenu(identifier);
-    }
-    resetDockMenuDragState();
+    event.preventDefault();
+    finishMenuDockDrag(event);
+    return;
   }
+
+  if (sourceElement) {
+    try {
+      sourceElement.releasePointerCapture(event.pointerId);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  const identifier = dockMenuDragState.identifier;
+  if (identifier) {
+    openDockFromMenu(identifier);
+  }
+  resetDockMenuDragState();
 }
 
 function getDockIdentifierFromElement(element) {
@@ -10395,6 +10628,9 @@ function handlePointerDown(event) {
   if (playbackState.playing) {
     stopFramePlayback();
   }
+  if (event.pointerType === 'touch' && virtualCursorState.zoomTemporarilyDisabled) {
+    return;
+  }
   event.preventDefault();
   pointerHoverState.active = false;
   pointerHoverState.x = null;
@@ -10578,6 +10814,9 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event) {
+  if (event.pointerType === 'touch' && virtualCursorState.zoomTemporarilyDisabled) {
+    return;
+  }
   let sharedPointerPosition = null;
   if (event.pointerType === 'mouse' || event.pointerType === 'pen') {
     sharedPointerPosition = getPointerPosition(event);
@@ -10701,6 +10940,9 @@ function handlePointerMove(event) {
 }
 
 function handlePointerUp(event) {
+  if (event && event.pointerType === 'touch' && virtualCursorState.zoomTemporarilyDisabled) {
+    return;
+  }
   let handledShape = false;
   if (event && shapeState.active && event.pointerId === shapeState.pointerId) {
     finalizeShapeDrawing();
