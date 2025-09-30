@@ -13,6 +13,14 @@ let shapePreviewCanvas = null;
 let shapePreviewCtx = null;
 let overlayDirty = false;
 let overlayRafId = null;
+const previewOverlayState = {
+  layers: {
+    virtualStroke: new Map(),
+    virtualHover: new Map(),
+    pointer: new Map(),
+  },
+};
+const PREVIEW_LAYER_ORDER = ['virtualStroke', 'virtualHover', 'pointer'];
 const pixelSizeInput = document.getElementById('pixelSize');
 const historyLimitInput = document.getElementById('historyLimit');
 const memoryUsageDisplay = document.getElementById('memoryUsage');
@@ -51,6 +59,7 @@ const dockStateButtons = Array.from(document.querySelectorAll('[data-dock-state]
 const layerDock = document.getElementById('layerDock');
 const layerDockHandle = document.getElementById('layerDockDrag');
 const layerDockStatusText = document.getElementById('layerDockStatus');
+const layerDockStatusButton = document.querySelector('[data-dock-state="layerDock"]');
 const layerListElement = document.getElementById('layerList');
 const addLayerButtons = Array.from(document.querySelectorAll('[data-action="addLayer"]'));
 const deleteLayerButton = document.getElementById('deleteLayer');
@@ -69,6 +78,10 @@ const virtualCursorToggle = document.querySelector('[data-toggle="virtualCursor"
 const toolDockStatusIcon = document.getElementById('toolDockStatus');
 const paletteDockStatusSwatch = document.getElementById('paletteDockStatus');
 const canvasDockStatusText = document.getElementById('canvasDockStatus');
+const canvasDockStatusButton = document.querySelector('[data-dock-state="canvasDock"]');
+const canvasTabButtons = Array.from(document.querySelectorAll('[data-canvas-tab]'));
+const canvasTabPanels = Array.from(document.querySelectorAll('#canvasDock .mini-tab-panel'));
+const colorModeInputs = Array.from(document.querySelectorAll('input[name="colorMode"]'));
 let addPaletteButton = null;
 let paletteEditor = null;
 let paletteEditorVisible = false;
@@ -93,6 +106,8 @@ let paletteEditorHistorySlots = [];
 let paletteEditorToolbar = null;
 const PALETTE_EDITOR_HISTORY_SIZE = 5;
 let paletteEditorRecentColors = [];
+const indexedColorLookup = new Map();
+let activeCanvasTabId = canvasTabButtons[0]?.dataset.canvasTab || 'canvasTabSize';
 const dockElements = {
   toolDock,
   paletteDock,
@@ -119,6 +134,14 @@ const DOCK_LABELS = {
   layerDock: 'レイヤー',
 };
 const DOCK_ORDER = ['toolDock', 'paletteDock', 'layerDock', 'canvasDock'];
+
+const COLOR_MODE_OPTIONS = ['rgb', 'indexed', 'cmyk'];
+const COLOR_MODE_DEFAULT = 'rgb';
+const COLOR_MODE_LABELS = {
+  rgb: 'RGB',
+  indexed: 'インデックス',
+  cmyk: 'CMYK',
+};
 
 const DOCK_HELP_CONTENT = {
   dockMenu: {
@@ -170,9 +193,9 @@ let activeHelpPopover = null;
 let activeHelpButton = null;
 let helpListenersAttached = false;
 const ICON_LAYER_VISIBLE =
-  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12C4.5 7 8 4 12 4s7.5 3 10 8c-2.5 5-6 8-10 8s-7.5-3-10-8Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="1.6" /></svg>';
+  '<img src="assets/icons/action-visibility-on.svg" alt="" width="16" height="16" />';
 const ICON_LAYER_HIDDEN =
-  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4L20 20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /><path d="M18.5 15.5C20.17 14.1 21.5 12.24 22 12c-2.5-5-6-8-10-8-1.27 0-2.49.23-3.66.66" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><path d="M5.5 8.5C3.83 9.9 2.5 11.76 2 12c1.25 2.5 2.93 4.59 4.93 6.08" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /><path d="M9 9.16A3 3 0 0 1 14.84 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>';
+  '<img src="assets/icons/action-visibility-off.svg" alt="" width="16" height="16" />';
 const ICON_LAYER_HANDLE =
   '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5V19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M15 5V19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 const STORAGE_KEY = 'pixiedraw-layer-state-v1';
@@ -191,7 +214,7 @@ const GIF_DEFAULT_DELAY = 8; // 100分の1秒単位（約80ms）
 const PLAYBACK_DEFAULT_FPS = 6;
 const PLAY_BUTTON_MARKUP = '<span aria-hidden="true">▶</span><span class="sr-only">再生</span>';
 const STOP_BUTTON_MARKUP = '<span aria-hidden="true">■</span><span class="sr-only">停止</span>';
-const PIXEL_SIZE_DEFAULT = 1;
+const PIXEL_SIZE_DEFAULT = 2;
 const PIXEL_SIZE_MIN = 1;
 const PIXEL_SIZE_MAX = 32;
 const HISTORY_LIMIT_DEFAULT = 30;
@@ -284,12 +307,14 @@ const state = {
   historyLimit: initialHistoryLimit,
   colorAlpha: 1,
   brushSize: Number(brushSizeInput.value) || 1,
-  tool: 'pen',
+  tool: 'pencil',
   color: colorPicker.value,
+  colorMode: COLOR_MODE_DEFAULT,
   zoom: 1,
   minZoom: ZOOM_LIMITS.min,
   offsetX: 0,
   offsetY: 0,
+  palette: [],
 };
 
 const layersState = {
@@ -301,6 +326,8 @@ const layersState = {
 const HAS_TOUCH_SUPPORT =
   typeof navigator !== 'undefined' &&
   (navigator.maxTouchPoints > 0 || (typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches));
+
+const DEFAULT_CURSOR_ICON = 'assets/icons/tool-cursor.png';
 
 const virtualCursorState = {
   enabled: false,
@@ -322,10 +349,12 @@ const virtualCursorState = {
   residualDY: 0,
   prevDrawX: null,
   prevDrawY: null,
-  previewPixels: new Map(),
+  visualX: Math.floor(state.width / 2) + 0.5,
+  visualY: Math.floor(state.height / 2) + 0.5,
 };
 
 let virtualCursorElement = null;
+let virtualCursorIconElement = null;
 let virtualDrawControl = null;
 let virtualDrawHandle = null;
 let virtualDrawActionButton = null;
@@ -348,11 +377,14 @@ const selectionState = {
   moveCanvas: null,
   moveLayerId: null,
   moveInitialBounds: null,
+  pendingClearClick: null,
+  pendingClearMoved: false,
+  moveIndexBuffer: null,
 };
 
-const SELECTION_OUTLINE_THICKNESS_PX = 2;
-const SELECTION_DASH_LENGTH_PX = 4;
-const SELECTION_DASH_SPEED_PX = 15;
+const SELECTION_OUTLINE_THICKNESS_PX = 1;
+const SELECTION_DASH_LENGTH_PX = 10;
+const SELECTION_DASH_SPEED_PX = 10;
 const SELECTION_COLOR_LIGHT = '#ffffff';
 const SELECTION_COLOR_DARK = '#000000';
 const FLOOD_FILL_BATCH_SIZE = 4096;
@@ -411,6 +443,16 @@ let pinchStartZoom = 1;
 let userAdjustedZoom = false;
 let pinchActive = false;
 let pinchLastFocus = null;
+const pointerHoverState = {
+  active: false,
+  x: null,
+  y: null,
+  pointerType: null,
+};
+const CANVAS_CURSOR_VISIBLE = 'crosshair';
+const CANVAS_CURSOR_HIDDEN = 'none';
+let canvasCursorHidden = false;
+let desktopVirtualCursorActive = false;
 const panState = {
   active: false,
   pointerId: null,
@@ -624,12 +666,27 @@ function snapshotToSerializable(snapshot) {
     pixelSize: snapshot.pixelSize,
     selectedId: snapshot.selectedId,
     nextId: snapshot.nextId,
+    colorMode: snapshot.colorMode || COLOR_MODE_DEFAULT,
+    color: normalizeHex(snapshot.color || state.color),
+    colorAlpha: Number.isFinite(snapshot.colorAlpha) ? snapshot.colorAlpha : state.colorAlpha,
+    palette: Array.isArray(snapshot.palette)
+      ? snapshot.palette.map((entry) => ({
+          color: normalizeHex(entry?.color || state.color),
+          alpha: clamp(Number(entry?.alpha ?? 1), 0, 1),
+          storedUint32: typeof entry?.storedUint32 === 'number' ? entry.storedUint32 : undefined,
+        }))
+      : state.palette.map((entry) => ({
+          color: normalizeHex(entry?.color || state.color),
+          alpha: clamp(Number(entry?.alpha ?? 1), 0, 1),
+          storedUint32: typeof entry?.storedUint32 === 'number' ? entry.storedUint32 : undefined,
+        })),
     layers: snapshot.layers.map((layer) => ({
       id: layer.id,
       name: layer.name,
       visible: layer.visible,
       opacity: layer.opacity,
       image: imageDataToDataURL(layer.imageData),
+      indexBuffer: layer.indexBuffer ? Array.from(layer.indexBuffer) : undefined,
     })),
   };
 }
@@ -653,14 +710,58 @@ async function snapshotFromSerializable(serialized) {
       visible: layerData.visible !== false,
       opacity: clamp(Number(layerData.opacity ?? 1), 0, 1),
       imageData,
+      indexBuffer: Array.isArray(layerData.indexBuffer)
+        ? Uint16Array.from(layerData.indexBuffer)
+        : layerData.indexBuffer instanceof Uint16Array
+          ? layerData.indexBuffer.slice()
+          : null,
     });
   }
+  let paletteEntries = Array.isArray(serialized.palette)
+    ? serialized.palette.map((entry) =>
+        createPaletteEntry(
+          entry?.color ?? state.color,
+          typeof entry?.alpha === 'number' ? entry.alpha : 1,
+          typeof entry?.storedUint32 === 'number' ? entry.storedUint32 : null,
+        ),
+      )
+    : [];
+  paletteEntries = ensurePaletteHasTransparentEntry(paletteEntries);
+  const localLookup = new Map();
+  seedColorLookupFromPalette(paletteEntries, localLookup);
+  layers.forEach((layer) => {
+    if (
+      !(layer.indexBuffer instanceof Uint16Array) ||
+      layer.indexBuffer.length !== width * height
+    ) {
+      const buffer = new Uint16Array(width * height);
+      if (layer.imageData?.data) {
+        const data = layer.imageData.data;
+        for (let pixelIndex = 0, dataIndex = 0; pixelIndex < buffer.length; pixelIndex += 1, dataIndex += 4) {
+          buffer[pixelIndex] = resolvePaletteIndexFromPixel(
+            data[dataIndex],
+            data[dataIndex + 1],
+            data[dataIndex + 2],
+            data[dataIndex + 3],
+            paletteEntries.length > 0 ? paletteEntries : state.palette,
+            paletteEntries.length > 0 ? localLookup : indexedColorLookup,
+          );
+        }
+      }
+      layer.indexBuffer = buffer;
+    }
+    redrawSnapshotLayerFromIndexBuffer(layer, paletteEntries.length > 0 ? paletteEntries : state.palette);
+  });
   return {
     width,
     height,
     pixelSize,
     selectedId: typeof serialized.selectedId === 'string' ? serialized.selectedId : null,
     nextId: Number(serialized.nextId) || layers.length + 1,
+    colorMode: COLOR_MODE_OPTIONS.includes(serialized.colorMode) ? serialized.colorMode : COLOR_MODE_DEFAULT,
+    color: normalizeHex(typeof serialized.color === 'string' ? serialized.color : state.color),
+    colorAlpha: clamp(Number(serialized.colorAlpha ?? state.colorAlpha ?? 1), 0, 1),
+    palette: paletteEntries,
     layers,
   };
 }
@@ -679,12 +780,19 @@ function computeFrameLayerContent(snapshot) {
 function serializeAppState() {
   initFrames();
   saveCurrentFrame();
+  updatePaletteState({ skipSave: true, skipRecolor: true });
+  const palette = state.palette.map((entry) => ({
+    color: entry.color,
+    alpha: entry.alpha,
+    storedUint32: typeof entry.storedUint32 === 'number' ? entry.storedUint32 : undefined,
+  }));
   const layers = layersState.layers.map((layer) => ({
     id: layer.id,
     name: layer.name,
     visible: layer.visible,
     opacity: layer.opacity,
     image: layer.canvas.toDataURL('image/png'),
+    indexBuffer: layer.indexBuffer ? Array.from(layer.indexBuffer) : undefined,
   }));
   const frames = framesState.frames.map((frame) => ({
     id: frame.id,
@@ -699,6 +807,8 @@ function serializeAppState() {
       height: state.height,
       pixelSize: state.pixelScale,
       colorAlpha: state.colorAlpha,
+      colorMode: state.colorMode,
+      color: state.color,
     },
     historyLimit: state.historyLimit,
     selectedId: layersState.selectedId,
@@ -707,6 +817,7 @@ function serializeAppState() {
     frames,
     framesActiveId: framesState.activeId,
     framesNextId: framesState.nextId,
+    palette,
   };
 }
 
@@ -778,6 +889,9 @@ async function restoreProjectState() {
   const savedHistoryLimit = Number(payload.historyLimit);
   const savedPixelSize = Number(payload.canvas?.pixelSize);
   const savedColorAlpha = Number(payload.canvas?.colorAlpha ?? payload.colorAlpha);
+  const savedColorMode = typeof payload.canvas?.colorMode === 'string' ? payload.canvas.colorMode : payload.colorMode;
+  const savedColorValue = typeof payload.canvas?.color === 'string' ? payload.canvas.color : payload.color;
+  const savedPalette = Array.isArray(payload.palette) ? payload.palette : null;
   if (pixelSizeInput) {
     const min = Number(pixelSizeInput.min) || pixelSizeMin;
     const max = Number(pixelSizeInput.max) || pixelSizeMax;
@@ -810,13 +924,30 @@ async function restoreProjectState() {
     updateHistoryLimit({ skipSave: true });
     updatePixelSize({ skipComposite: true, preserveDimensions: true, skipSave: true });
 
+    const resolvedColor = normalizeHex(savedColorValue || state.color);
+    state.color = resolvedColor;
+    colorPicker.value = resolvedColor;
+    setColorMode(savedColorMode, { skipSave: true, force: true, rebuildPalette: false });
+    if (savedPalette && savedPalette.length > 0) {
+      initPalette(savedPalette, { activeColor: resolvedColor, activeAlpha: state.colorAlpha, skipSave: true });
+    } else {
+      setActiveColor(resolvedColor, null, { closePanel: false, alpha: state.colorAlpha });
+      updatePaletteState({ skipSave: true, skipRecolor: true });
+    }
+
     for (let index = 0; index < payload.layers.length; index += 1) {
       const layerData = payload.layers[index];
+      const indexSource = Array.isArray(layerData?.indexBuffer)
+        ? Uint16Array.from(layerData.indexBuffer)
+        : layerData?.indexBuffer instanceof Uint16Array
+          ? layerData.indexBuffer
+          : null;
       const layer = createLayer({
         name: typeof layerData?.name === 'string' && layerData.name.trim().length > 0 ? layerData.name : `レイヤー${layersState.nextId}`,
         visible: layerData?.visible !== false,
         opacity: clamp(Number(layerData?.opacity ?? 1), 0, 1),
         insertAt: layersState.layers.length,
+        indexSource,
       });
       if (typeof layerData?.id === 'string' && layerData.id.length > 0) {
         layer.id = layerData.id;
@@ -826,10 +957,16 @@ async function restoreProjectState() {
         if (image) {
           layer.ctx.clearRect(0, 0, width, height);
           layer.ctx.drawImage(image, 0, 0, width, height);
+          layer.hasContent = detectLayerHasContent(layer);
+          backfillLayerIndexBuffer(layer);
+          redrawLayerFromIndexBuffer(layer);
         }
       } catch (error) {
         console.warn('レイヤー画像の復元に失敗しました', error);
         layer.ctx.clearRect(0, 0, width, height);
+        if (layer.indexBuffer) {
+          layer.indexBuffer.fill(0);
+        }
       }
       layer.hasContent = detectLayerHasContent(layer);
       if (typeof layerData?.id === 'string') {
@@ -925,6 +1062,9 @@ function captureHistorySnapshot() {
     width: state.width,
     height: state.height,
     pixelSize: state.pixelScale,
+    colorMode: state.colorMode,
+    color: state.color,
+    colorAlpha: state.colorAlpha,
     selectedId: layersState.selectedId,
     nextId: layersState.nextId,
     layers: layersState.layers.map((layer) => ({
@@ -933,7 +1073,9 @@ function captureHistorySnapshot() {
       visible: layer.visible,
       opacity: layer.opacity,
       imageData: layer.ctx.getImageData(0, 0, state.width, state.height),
+      indexBuffer: layer.indexBuffer ? layer.indexBuffer.slice() : null,
     })),
+    palette: capturePaletteSnapshot(),
   };
 }
 
@@ -1159,6 +1301,19 @@ function applyHistorySnapshot(snapshot) {
     updatePixelSizeConstraints();
     updatePixelSize({ skipComposite: true, preserveDimensions: true, skipSave: true });
 
+    const snapshotColor = normalizeHex(snapshot.color || state.color);
+    const snapshotAlpha = clamp(Number(snapshot.colorAlpha ?? state.colorAlpha ?? 1), 0, 1);
+    state.colorAlpha = snapshotAlpha;
+    state.color = snapshotColor;
+    colorPicker.value = snapshotColor;
+    setColorMode(snapshot.colorMode, { skipSave: true, force: true, rebuildPalette: false });
+    if (Array.isArray(snapshot.palette) && snapshot.palette.length > 0) {
+      initPalette(snapshot.palette, { activeColor: snapshotColor, activeAlpha: snapshotAlpha, skipSave: true });
+    } else {
+      setActiveColor(snapshotColor, null, { closePanel: false, alpha: snapshotAlpha });
+      updatePaletteState({ skipSave: true, skipRecolor: true });
+    }
+
     snapshot.layers.forEach((layerData) => {
       const layer = createLayer({
         name: typeof layerData?.name === 'string' ? layerData.name : `レイヤー${layersState.nextId}`,
@@ -1166,6 +1321,12 @@ function applyHistorySnapshot(snapshot) {
         opacity: clamp(Number(layerData?.opacity ?? 1), 0, 1),
         insertAt: layersState.layers.length,
         imageSource: layerData?.imageData || null,
+        indexSource:
+          layerData?.indexBuffer instanceof Uint16Array
+            ? layerData.indexBuffer
+            : Array.isArray(layerData?.indexBuffer)
+              ? Uint16Array.from(layerData.indexBuffer)
+              : null,
       });
       if (typeof layerData?.id === 'string' && layerData.id.length > 0) {
         layer.id = layerData.id;
@@ -1237,13 +1398,39 @@ function createOffscreenCanvas(width, height) {
   return { canvas, ctx: context };
 }
 
-function createLayer({ name, insertAt = 0, imageSource = null, visible = true, opacity = 1 } = {}) {
+function createIndexBuffer(width, height, { source = null, fill = 0 } = {}) {
+  const length = Math.max(0, Math.floor(width) * Math.floor(height));
+  if (length <= 0) {
+    return new Uint16Array(0);
+  }
+  if (source instanceof Uint16Array && source.length === length) {
+    return source.slice();
+  }
+  if (Array.isArray(source) && source.length === length) {
+    return Uint16Array.from(source);
+  }
+  const buffer = new Uint16Array(length);
+  if (typeof fill === 'number' && fill !== 0) {
+    buffer.fill(fill);
+  }
+  return buffer;
+}
+
+function createLayer({
+  name,
+  insertAt = 0,
+  imageSource = null,
+  indexSource = null,
+  visible = true,
+  opacity = 1,
+} = {}) {
   const { canvas, ctx: layerCtx } = createOffscreenCanvas(state.width, state.height);
   if (imageSource instanceof HTMLCanvasElement || imageSource instanceof ImageBitmap) {
     layerCtx.drawImage(imageSource, 0, 0);
   } else if (imageSource instanceof ImageData) {
     layerCtx.putImageData(imageSource, 0, 0);
   }
+  const indexBuffer = createIndexBuffer(state.width, state.height, { source: indexSource });
   const layer = {
     id: `layer-${layersState.nextId}`,
     name: name || `レイヤー${layersState.nextId}`,
@@ -1251,10 +1438,15 @@ function createLayer({ name, insertAt = 0, imageSource = null, visible = true, o
     opacity: clamp(Number(opacity) || 1, 0, 1),
     canvas,
     ctx: layerCtx,
+    indexBuffer,
     hasContent: false,
   };
   layersState.nextId += 1;
   layer.hasContent = detectLayerHasContent(layer);
+  if (layer.hasContent) {
+    backfillLayerIndexBuffer(layer);
+    redrawLayerFromIndexBuffer(layer);
+  }
   const clampedIndex = clamp(Math.round(insertAt), 0, layersState.layers.length);
   layersState.layers.splice(clampedIndex, 0, layer);
   if (!layersState.selectedId) {
@@ -1380,6 +1572,8 @@ function processFloodFillChunk() {
     fillColor,
     width,
     height,
+    indexBuffer,
+    paletteIndex,
   } = task;
   let iterations = 0;
   while (stack.length > 0 && iterations < FLOOD_FILL_BATCH_SIZE) {
@@ -1396,6 +1590,9 @@ function processFloodFillChunk() {
       continue;
     }
     pixels[index] = fillColor;
+    if (indexBuffer && paletteIndex !== undefined) {
+      indexBuffer[index] = paletteIndex;
+    }
     iterations += 1;
     if (!task.changed) {
       markHistoryDirty();
@@ -1453,7 +1650,11 @@ function updateLayerDockStatus() {
   const activeLayer = getActiveLayer();
   const activeFrame = getFrameById(framesState.activeId);
   const layerName = activeLayer ? activeLayer.name : 'レイヤーなし';
-  layerDockStatusText.textContent = activeFrame ? `${activeFrame.name} · ${layerName}` : layerName;
+  const statusText = activeFrame ? `${activeFrame.name} · ${layerName}` : layerName;
+  layerDockStatusText.textContent = statusText;
+  if (layerDockStatusButton) {
+    layerDockStatusButton.title = statusText;
+  }
 }
 
 function updateLayerControlAvailability() {
@@ -1952,6 +2153,36 @@ const defaultPalette = [
 ];
 
 const MAX_PALETTE_COLORS = 256;
+const TRANSPARENT_COLOR_HEX = '#000000';
+
+function isTransparentPaletteEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+  const alphaByte = typeof entry.storedAlphaByte === 'number' ? entry.storedAlphaByte : Math.round((entry.alpha ?? 0) * 255);
+  return alphaByte <= 0;
+}
+
+function getExistingTransparentEntry(paletteEntries = state.palette) {
+  if (!Array.isArray(paletteEntries)) {
+    return null;
+  }
+  const found = paletteEntries.find(isTransparentPaletteEntry);
+  return found ? { ...found } : null;
+}
+
+function createTransparentPaletteEntry() {
+  const existing = getExistingTransparentEntry();
+  if (existing) {
+    return existing;
+  }
+  return {
+    color: TRANSPARENT_COLOR_HEX,
+    alpha: 0,
+    storedUint32: 0,
+    storedAlphaByte: 0,
+  };
+}
 
 function applyCanvasDisplaySize() {
   const displayWidth = state.width * state.pixelSize;
@@ -1961,7 +2192,6 @@ function applyCanvasDisplaySize() {
   if (canvasStage) {
     canvasStage.style.width = `${displayWidth}px`;
     canvasStage.style.height = `${displayHeight}px`;
-    canvasStage.style.setProperty('--pixel-cell', `${state.pixelSize}px`);
   }
   updateSelectionCanvasSize();
   clampOffsets();
@@ -1976,7 +2206,10 @@ function applyCanvasZoom() {
   canvasStage.style.setProperty('--canvas-scale', state.zoom);
   canvasStage.style.setProperty('--canvas-offset-x', `${state.offsetX}px`);
   canvasStage.style.setProperty('--canvas-offset-y', `${state.offsetY}px`);
+  const cursorCompensation = state.zoom > 0 ? 1 / state.zoom : 1;
+  canvasStage.style.setProperty('--cursor-compensation', String(cursorCompensation));
   updateVirtualCursorVisualPosition();
+  renderSelectionOverlay();
 }
 
 function initSelectionOverlay() {
@@ -2082,14 +2315,18 @@ function clearSelection(options = {}) {
   selectionState.moveOffsetX = 0;
   selectionState.moveOffsetY = 0;
   selectionState.moveCanvas = null;
+  selectionState.moveIndexBuffer = null;
   selectionState.moveLayerId = null;
   selectionState.moveInitialBounds = null;
+  selectionState.pendingClearClick = null;
+  selectionState.pendingClearMoved = false;
   releaseSelectionCapture();
   stopSelectionAnimation();
   clearSelectionContentCanvas();
   if (!silent) {
     renderSelectionOverlay();
   }
+  refreshHoverPreviews();
 }
 
 function setSelectionMask(mask, bounds) {
@@ -2097,6 +2334,7 @@ function setSelectionMask(mask, bounds) {
   selectionState.bounds = bounds;
   selectionState.active = Boolean(mask && bounds);
   renderSelectionOverlay();
+  refreshHoverPreviews();
 }
 
 function hasActiveSelection() {
@@ -2143,58 +2381,132 @@ function drawSelectionBorder(mask, minX, minY, maxX, maxY, offsetX = 0, offsetY 
   const pushSegment = (x0, y0, x1, y1) => {
     segments.push(x0 + offsetPx, y0 + offsetPy, x1 + offsetPx, y1 + offsetPy);
   };
+  const pushHorizontalRun = (row, startX, endX, isTopEdge) => {
+    const baseY = isTopEdge ? row * pixelSize + half : (row + 1) * pixelSize - half;
+    const left = startX * pixelSize + half;
+    const right = (endX + 1) * pixelSize - half;
+    pushSegment(left, baseY, right, baseY);
+  };
+  const pushVerticalRun = (column, startY, endY, isLeftEdge) => {
+    const baseX = isLeftEdge ? column * pixelSize + half : (column + 1) * pixelSize - half;
+    const top = startY * pixelSize + half;
+    const bottom = (endY + 1) * pixelSize - half;
+    pushSegment(baseX, top, baseX, bottom);
+  };
   for (let y = minY; y <= maxY; y += 1) {
-    const rowOffset = y * width;
-    for (let x = minX; x <= maxX; x += 1) {
-      if (!mask[rowOffset + x]) {
+    let x = minX;
+    while (x <= maxX) {
+      const index = y * width + x;
+      if (!mask[index]) {
+        x += 1;
         continue;
       }
-      const neighbors = [
-        { dx: -1, dy: 0 },
-        { dx: 1, dy: 0 },
-        { dx: 0, dy: -1 },
-        { dx: 0, dy: 1 },
-      ];
-      let hasEdge = false;
-      for (const { dx, dy } of neighbors) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || nx >= width || ny < 0 || ny >= height || !mask[ny * width + nx]) {
-          hasEdge = true;
+      const upEmpty = y === 0 || !mask[index - width];
+      if (!upEmpty) {
+        x += 1;
+        continue;
+      }
+      let runEnd = x;
+      while (runEnd + 1 <= maxX) {
+        const nextIndex = y * width + runEnd + 1;
+        if (!mask[nextIndex]) {
           break;
         }
+        const nextUpEmpty = y === 0 || !mask[nextIndex - width];
+        if (!nextUpEmpty) {
+          break;
+        }
+        runEnd += 1;
       }
-      if (!hasEdge) {
+      pushHorizontalRun(y, x, runEnd, true);
+      x = runEnd + 1;
+    }
+  }
+  for (let y = minY; y <= maxY; y += 1) {
+    let x = minX;
+    while (x <= maxX) {
+      const index = y * width + x;
+      if (!mask[index]) {
+        x += 1;
         continue;
       }
-      const leftEmpty = x === 0 || !mask[rowOffset + x - 1];
-      const rightEmpty = x === width - 1 || !mask[rowOffset + x + 1];
-      const upEmpty = y === 0 || !mask[(y - 1) * width + x];
-      const downEmpty = y === height - 1 || !mask[(y + 1) * width + x];
-      if (leftEmpty) {
-        const pxX = x * pixelSize + half;
-        const top = y * pixelSize + half;
-        const bottom = (y + 1) * pixelSize - half;
-        pushSegment(pxX, top, pxX, bottom);
+      const downEmpty = y === height - 1 || !mask[index + width];
+      if (!downEmpty) {
+        x += 1;
+        continue;
       }
-      if (rightEmpty) {
-        const pxX = (x + 1) * pixelSize - half;
-        const top = y * pixelSize + half;
-        const bottom = (y + 1) * pixelSize - half;
-        pushSegment(pxX, top, pxX, bottom);
+      let runEnd = x;
+      while (runEnd + 1 <= maxX) {
+        const nextIndex = y * width + runEnd + 1;
+        if (!mask[nextIndex]) {
+          break;
+        }
+        const nextDownEmpty = y === height - 1 || !mask[nextIndex + width];
+        if (!nextDownEmpty) {
+          break;
+        }
+        runEnd += 1;
       }
-      if (upEmpty) {
-        const pxY = y * pixelSize + half;
-        const left = x * pixelSize + half;
-        const right = (x + 1) * pixelSize - half;
-        pushSegment(left, pxY, right, pxY);
+      pushHorizontalRun(y, x, runEnd, false);
+      x = runEnd + 1;
+    }
+  }
+  for (let x = minX; x <= maxX; x += 1) {
+    let y = minY;
+    while (y <= maxY) {
+      const index = y * width + x;
+      if (!mask[index]) {
+        y += 1;
+        continue;
       }
-      if (downEmpty) {
-        const pxY = (y + 1) * pixelSize - half;
-        const left = x * pixelSize + half;
-        const right = (x + 1) * pixelSize - half;
-        pushSegment(left, pxY, right, pxY);
+      const leftEmpty = x === 0 || !mask[index - 1];
+      if (!leftEmpty) {
+        y += 1;
+        continue;
       }
+      let runEnd = y;
+      while (runEnd + 1 <= maxY) {
+        const nextIndex = (runEnd + 1) * width + x;
+        if (!mask[nextIndex]) {
+          break;
+        }
+        const nextLeftEmpty = x === 0 || !mask[nextIndex - 1];
+        if (!nextLeftEmpty) {
+          break;
+        }
+        runEnd += 1;
+      }
+      pushVerticalRun(x, y, runEnd, true);
+      y = runEnd + 1;
+    }
+  }
+  for (let x = minX; x <= maxX; x += 1) {
+    let y = minY;
+    while (y <= maxY) {
+      const index = y * width + x;
+      if (!mask[index]) {
+        y += 1;
+        continue;
+      }
+      const rightEmpty = x === width - 1 || !mask[index + 1];
+      if (!rightEmpty) {
+        y += 1;
+        continue;
+      }
+      let runEnd = y;
+      while (runEnd + 1 <= maxY) {
+        const nextIndex = (runEnd + 1) * width + x;
+        if (!mask[nextIndex]) {
+          break;
+        }
+        const nextRightEmpty = x === width - 1 || !mask[nextIndex + 1];
+        if (!nextRightEmpty) {
+          break;
+        }
+        runEnd += 1;
+      }
+      pushVerticalRun(x, y, runEnd, false);
+      y = runEnd + 1;
     }
   }
   strokeSelectionSegments(segments);
@@ -2267,25 +2579,23 @@ function filterMaskToActiveLayer(mask, bounds) {
   };
 }
 
-function clearVirtualCursorPreview() {
-  if (virtualCursorState.previewPixels) {
-    virtualCursorState.previewPixels.clear();
+function getPreviewLayerMap(layerName) {
+  if (!previewOverlayState.layers[layerName]) {
+    previewOverlayState.layers[layerName] = new Map();
   }
-  if (virtualCursorPreviewCtx && virtualCursorPreviewCanvas) {
-    virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
-  }
+  return previewOverlayState.layers[layerName];
 }
 
-function refreshVirtualCursorPreview() {
+function drawPreviewLayer(layerName) {
   if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
     return;
   }
-  virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
-  if (!virtualCursorState.previewPixels || virtualCursorState.previewPixels.size === 0) {
+  const layer = getPreviewLayerMap(layerName);
+  if (!layer || layer.size === 0) {
     return;
   }
   const pixelSize = state.pixelSize;
-  for (const [key, color] of virtualCursorState.previewPixels.entries()) {
+  for (const [key, color] of layer.entries()) {
     const [pxStr, pyStr] = key.split(',');
     const px = Number(pxStr);
     const py = Number(pyStr);
@@ -2297,21 +2607,73 @@ function refreshVirtualCursorPreview() {
   }
 }
 
-function addVirtualCursorPreviewPixel(px, py, color) {
+function renderPreviewOverlay() {
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
+    initSelectionOverlay();
+  }
   if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
     return;
   }
-  const key = `${px},${py}`;
-  if (!virtualCursorState.previewPixels) {
-    virtualCursorState.previewPixels = new Map();
+  virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
+  for (const layerName of PREVIEW_LAYER_ORDER) {
+    drawPreviewLayer(layerName);
   }
-  if (virtualCursorState.previewPixels.has(key)) {
+}
+
+function reapplyHoverAndPointerPreviews() {
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
     return;
   }
-  virtualCursorState.previewPixels.set(key, color);
+  drawPreviewLayer('virtualHover');
+  drawPreviewLayer('pointer');
+}
+
+function clearVirtualCursorPreview(options = {}) {
+  const { includeHover = true, includePointer = false } = options;
+  const strokeLayer = getPreviewLayerMap('virtualStroke');
+  if (strokeLayer.size > 0) {
+    strokeLayer.clear();
+  }
+  if (includeHover) {
+    const hoverLayer = getPreviewLayerMap('virtualHover');
+    if (hoverLayer.size > 0) {
+      hoverLayer.clear();
+    }
+  }
+  if (includePointer) {
+    const pointerLayer = getPreviewLayerMap('pointer');
+    if (pointerLayer.size > 0) {
+      pointerLayer.clear();
+    }
+  }
+  renderPreviewOverlay();
+}
+
+function refreshVirtualCursorPreview() {
+  renderPreviewOverlay();
+}
+
+function addVirtualCursorPreviewPixel(px, py, color, options = {}) {
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
+    initSelectionOverlay();
+  }
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
+    return false;
+  }
+  const { deferOverlayUpdate = false } = options;
+  const layer = getPreviewLayerMap('virtualStroke');
+  const key = `${px},${py}`;
+  if (layer.has(key)) {
+    return false;
+  }
+  layer.set(key, color);
   const pixelSize = state.pixelSize;
   virtualCursorPreviewCtx.fillStyle = color;
   virtualCursorPreviewCtx.fillRect(px * pixelSize, py * pixelSize, pixelSize, pixelSize);
+  if (!deferOverlayUpdate) {
+    reapplyHoverAndPointerPreviews();
+  }
+  return true;
 }
 
 function drawBrushPreview(x, y) {
@@ -2322,23 +2684,26 @@ function drawBrushPreview(x, y) {
     return;
   }
   const color = colorToCss(state.color, state.colorAlpha);
+  let applied = false;
   applyBrush(x, y, (px, py) => {
-    addVirtualCursorPreviewPixel(px, py, color);
+    const added = addVirtualCursorPreviewPixel(px, py, color, { deferOverlayUpdate: true });
+    applied = added || applied;
   });
+  if (applied) {
+    reapplyHoverAndPointerPreviews();
+  }
 }
 
 function beginVirtualCursorPreviewStroke(x, y) {
-  if (!virtualCursorState.previewPixels) {
-    virtualCursorState.previewPixels = new Map();
-  } else {
-    virtualCursorState.previewPixels.clear();
+  const strokeLayer = getPreviewLayerMap('virtualStroke');
+  if (strokeLayer.size > 0) {
+    strokeLayer.clear();
   }
-  if (!virtualCursorPreviewCtx) {
-    initSelectionOverlay();
+  const hoverLayer = getPreviewLayerMap('virtualHover');
+  if (hoverLayer.size > 0) {
+    hoverLayer.clear();
   }
-  if (virtualCursorPreviewCtx && virtualCursorPreviewCanvas) {
-    virtualCursorPreviewCtx.clearRect(0, 0, virtualCursorPreviewCanvas.width, virtualCursorPreviewCanvas.height);
-  }
+  renderPreviewOverlay();
   drawBrushPreview(x, y);
 }
 
@@ -2350,6 +2715,195 @@ function drawVirtualCursorPreviewLine(x0, y0, x1, y1) {
   drawLinePixels(x0, y0, x1, y1, (px, py) => {
     drawBrushPreview(px, py);
   });
+}
+
+function clearPointerPreview() {
+  const pointerLayer = getPreviewLayerMap('pointer');
+  if (pointerLayer.size === 0) {
+    return;
+  }
+  pointerLayer.clear();
+  renderPreviewOverlay();
+}
+
+function applyPointerHoverPreview() {
+  if (!pointerHoverState.active || !isBrushTool(state.tool)) {
+    clearPointerPreview();
+    return;
+  }
+  if (!virtualCursorPreviewCtx || !virtualCursorPreviewCanvas) {
+    initSelectionOverlay();
+  }
+  const pointerLayer = getPreviewLayerMap('pointer');
+  pointerLayer.clear();
+  const color = colorToCss(state.color, state.colorAlpha);
+  applyBrush(pointerHoverState.x, pointerHoverState.y, (px, py) => {
+    pointerLayer.set(`${px},${py}`, color);
+  });
+  renderPreviewOverlay();
+}
+
+function updatePointerHoverPreviewFromState() {
+  if (!pointerHoverState.active) {
+    clearPointerPreview();
+    return;
+  }
+  applyPointerHoverPreview();
+}
+
+function updatePointerHoverPreviewFromEvent(event, position = null) {
+  const pointerLayer = getPreviewLayerMap('pointer');
+  const pointerType = event.pointerType;
+  const isMouseLike = pointerType === 'mouse' || pointerType === 'pen';
+  if (!isMouseLike) {
+    if (pointerHoverState.active || pointerLayer.size > 0) {
+      pointerHoverState.active = false;
+      pointerHoverState.x = null;
+      pointerHoverState.y = null;
+      pointerHoverState.pointerType = null;
+      clearPointerPreview();
+    }
+    return;
+  }
+  if (!isBrushTool(state.tool) || panState.active || shapeState.active || selectionState.isMoving || selectionState.isDragging) {
+    if (pointerHoverState.active || pointerLayer.size > 0) {
+      pointerHoverState.active = false;
+      pointerHoverState.x = null;
+      pointerHoverState.y = null;
+      pointerHoverState.pointerType = null;
+      clearPointerPreview();
+    }
+    return;
+  }
+  if (isDrawing) {
+    if (pointerHoverState.active || pointerLayer.size > 0) {
+      pointerHoverState.active = false;
+      pointerHoverState.x = null;
+      pointerHoverState.y = null;
+      pointerHoverState.pointerType = null;
+      clearPointerPreview();
+    }
+    return;
+  }
+  const buttons = typeof event.buttons === 'number' ? event.buttons : 0;
+  if (buttons !== 0) {
+    if (pointerHoverState.active || pointerLayer.size > 0) {
+      pointerHoverState.active = false;
+      pointerHoverState.x = null;
+      pointerHoverState.y = null;
+      pointerHoverState.pointerType = null;
+      clearPointerPreview();
+    }
+    return;
+  }
+  const pos = position || getPointerPosition(event);
+  if (!pos.inBounds) {
+    if (pointerHoverState.active || pointerLayer.size > 0) {
+      pointerHoverState.active = false;
+      pointerHoverState.x = null;
+      pointerHoverState.y = null;
+      pointerHoverState.pointerType = null;
+      clearPointerPreview();
+    }
+    return;
+  }
+  pointerHoverState.active = true;
+  pointerHoverState.x = pos.x;
+  pointerHoverState.y = pos.y;
+  pointerHoverState.pointerType = pointerType;
+  applyPointerHoverPreview();
+}
+
+function updateVirtualCursorHoverPreview() {
+  const hoverLayer = getPreviewLayerMap('virtualHover');
+  if (!virtualCursorState.enabled || virtualCursorState.drawActive || isDrawing || !isBrushTool(state.tool)) {
+    if (hoverLayer.size > 0) {
+      hoverLayer.clear();
+      renderPreviewOverlay();
+    }
+    return;
+  }
+  const { x, y } = virtualCursorState;
+  hoverLayer.clear();
+  const color = colorToCss(state.color, state.colorAlpha);
+  applyBrush(x, y, (px, py) => {
+    hoverLayer.set(`${px},${py}`, color);
+  });
+  renderPreviewOverlay();
+}
+
+function refreshHoverPreviews() {
+  updatePointerHoverPreviewFromState();
+  updateVirtualCursorHoverPreview();
+}
+
+function hideCanvasCursor() {
+  if (!pixelCanvas || HAS_TOUCH_SUPPORT) {
+    return;
+  }
+  if (canvasCursorHidden) {
+    return;
+  }
+  pixelCanvas.style.cursor = CANVAS_CURSOR_HIDDEN;
+  canvasCursorHidden = true;
+}
+
+function showCanvasCursor() {
+  if (!pixelCanvas || HAS_TOUCH_SUPPORT) {
+    return;
+  }
+  pixelCanvas.style.cursor = CANVAS_CURSOR_VISIBLE;
+  canvasCursorHidden = false;
+}
+
+function setDesktopVirtualCursorActive(active) {
+  if (HAS_TOUCH_SUPPORT) {
+    return;
+  }
+  const nextActive = Boolean(active);
+  if (desktopVirtualCursorActive === nextActive) {
+    return;
+  }
+  desktopVirtualCursorActive = nextActive;
+  if (virtualCursorElement) {
+    const shouldShow = virtualCursorState.enabled && desktopVirtualCursorActive;
+    virtualCursorElement.dataset.visible = shouldShow ? 'true' : 'false';
+  }
+}
+
+function setVirtualCursorVisualCoordinates(canvasX, canvasY) {
+  if (!virtualCursorState.enabled) {
+    return;
+  }
+  const visualX = Number.isFinite(canvasX) ? clamp(canvasX, 0, state.width) : virtualCursorState.x + 0.5;
+  const visualY = Number.isFinite(canvasY) ? clamp(canvasY, 0, state.height) : virtualCursorState.y + 0.5;
+  virtualCursorState.visualX = visualX;
+  virtualCursorState.visualY = visualY;
+  updateVirtualCursorVisualPosition();
+}
+
+function resolveToolIcon(tool) {
+  const button = toolButtons.find((entry) => entry.dataset.tool === tool);
+  if (button) {
+    const icon = button.dataset.icon || button.querySelector('img')?.getAttribute('src');
+    if (icon) {
+      return icon;
+    }
+  }
+  return DEFAULT_CURSOR_ICON;
+}
+
+function updateVirtualCursorIcon(tool = state.tool) {
+  if (!virtualCursorIconElement) {
+    return;
+  }
+  const iconSrc = resolveToolIcon(tool);
+  if (!iconSrc) {
+    return;
+  }
+  if (virtualCursorIconElement.src !== iconSrc) {
+    virtualCursorIconElement.src = iconSrc;
+  }
 }
 
 function clearSelectionContentCanvas() {
@@ -2986,6 +3540,9 @@ function applyShapePixelsToLayer(pixels, color) {
   }
   const ctx = layer.ctx;
   ctx.fillStyle = color;
+  const indexBuffer = layer.indexBuffer;
+  const width = state.width;
+  const paletteIndex = getPaletteIndexForColor(state.color, state.colorAlpha);
   let applied = false;
   for (const key of pixels) {
     const [pxStr, pyStr] = key.split(',');
@@ -2998,6 +3555,9 @@ function applyShapePixelsToLayer(pixels, color) {
       continue;
     }
     ctx.fillRect(px, py, 1, 1);
+    if (indexBuffer && px >= 0 && px < width && py >= 0 && py < state.height) {
+      indexBuffer[py * width + px] = paletteIndex;
+    }
     applied = true;
   }
   return applied;
@@ -3024,6 +3584,9 @@ function cloneSnapshot(snapshot) {
     width: snapshot.width,
     height: snapshot.height,
     pixelSize: snapshot.pixelSize,
+    colorMode: snapshot.colorMode || COLOR_MODE_DEFAULT,
+    color: snapshot.color || state.color,
+    colorAlpha: Number.isFinite(snapshot.colorAlpha) ? snapshot.colorAlpha : state.colorAlpha,
     selectedId: snapshot.selectedId,
     nextId: snapshot.nextId,
     layers: snapshot.layers.map((layer) => ({
@@ -3032,7 +3595,9 @@ function cloneSnapshot(snapshot) {
       visible: layer.visible,
       opacity: layer.opacity,
       imageData: cloneImageData(layer.imageData),
+      indexBuffer: layer.indexBuffer ? layer.indexBuffer.slice() : null,
     })),
+    palette: Array.isArray(snapshot.palette) ? snapshot.palette.map((entry) => ({ ...entry })) : [],
   };
 }
 
@@ -3047,6 +3612,9 @@ function createBlankSnapshotFrom(snapshot) {
   blank.layers.forEach((layer) => {
     if (layer.imageData) {
       layer.imageData.data.fill(0);
+    }
+    if (layer.indexBuffer) {
+      layer.indexBuffer.fill(0);
     }
   });
   return blank;
@@ -3083,6 +3651,8 @@ function resizeSnapshot(snapshot, nextWidth, nextHeight, options = {}) {
       return;
     }
     const hasImageData = layer.imageData instanceof ImageData;
+    const oldIndexBuffer = layer.indexBuffer;
+    const newIndexBuffer = createIndexBuffer(width, height);
     const { canvas: sourceCanvas, ctx: sourceCtx } = createOffscreenCanvas(originalWidth, originalHeight);
     if (hasImageData) {
       sourceCtx.putImageData(layer.imageData, 0, 0);
@@ -3091,14 +3661,35 @@ function resizeSnapshot(snapshot, nextWidth, nextHeight, options = {}) {
     resizeCtx.imageSmoothingEnabled = false;
     if (resample && hasImageData) {
       resizeCtx.drawImage(sourceCanvas, 0, 0, originalWidth, originalHeight, 0, 0, width, height);
+      if (oldIndexBuffer?.length === originalWidth * originalHeight) {
+        const scaleX = originalWidth / width;
+        const scaleY = originalHeight / height;
+        for (let y = 0; y < height; y += 1) {
+          const srcY = Math.min(originalHeight - 1, Math.floor(y * scaleY));
+          for (let x = 0; x < width; x += 1) {
+            const srcX = Math.min(originalWidth - 1, Math.floor(x * scaleX));
+            newIndexBuffer[y * width + x] = oldIndexBuffer[srcY * originalWidth + srcX];
+          }
+        }
+      }
     } else if (hasImageData) {
       const copyWidth = Math.min(width, originalWidth);
       const copyHeight = Math.min(height, originalHeight);
       resizeCtx.drawImage(sourceCanvas, 0, 0, copyWidth, copyHeight, 0, 0, copyWidth, copyHeight);
+      if (oldIndexBuffer?.length === originalWidth * originalHeight) {
+        for (let y = 0; y < copyHeight; y += 1) {
+          const srcOffset = y * originalWidth;
+          const destOffset = y * width;
+          for (let x = 0; x < copyWidth; x += 1) {
+            newIndexBuffer[destOffset + x] = oldIndexBuffer[srcOffset + x];
+          }
+        }
+      }
     } else {
       resizeCtx.clearRect(0, 0, width, height);
     }
     layer.imageData = resizeCtx.getImageData(0, 0, width, height);
+    layer.indexBuffer = newIndexBuffer;
   });
 }
 
@@ -3125,11 +3716,15 @@ function syncFrameSnapshotsWithCurrentLayers() {
           visible: layer.visible,
           opacity: layer.opacity,
           imageData: createBlankImageData(width, height),
+          indexBuffer: createIndexBuffer(width, height),
         };
       } else {
         layerSnapshot.name = layer.name;
         layerSnapshot.visible = layer.visible;
         layerSnapshot.opacity = layer.opacity;
+        if (!(layerSnapshot.indexBuffer instanceof Uint16Array) || layerSnapshot.indexBuffer.length !== width * height) {
+          layerSnapshot.indexBuffer = createIndexBuffer(width, height);
+        }
       }
       updated.push(layerSnapshot);
     });
@@ -3403,6 +3998,8 @@ function beginSelectionMove(x, y, pointerId, target) {
   }
   const width = maxX - minX + 1;
   const height = maxY - minY + 1;
+  const layerIndexBuffer = layer.indexBuffer;
+  const moveIndexBuffer = new Uint16Array(width * height);
   let imageData;
   try {
     imageData = layer.ctx.getImageData(minX, minY, width, height);
@@ -3419,10 +4016,13 @@ function beginSelectionMove(x, y, pointerId, target) {
   for (let row = 0; row < height; row += 1) {
     for (let col = 0; col < width; col += 1) {
       const globalIndex = (minY + row) * canvasWidth + (minX + col);
+      const pixelIndex = (row * width + col) * 4;
       if (mask[globalIndex]) {
+        if (layerIndexBuffer && layerIndexBuffer.length === state.width * state.height) {
+          moveIndexBuffer[row * width + col] = layerIndexBuffer[globalIndex];
+        }
         continue;
       }
-      const pixelIndex = (row * width + col) * 4;
       data[pixelIndex] = 0;
       data[pixelIndex + 1] = 0;
       data[pixelIndex + 2] = 0;
@@ -3440,6 +4040,9 @@ function beginSelectionMove(x, y, pointerId, target) {
     for (let col = minX; col <= maxX; col += 1) {
       if (mask[rowOffset + col]) {
         layer.ctx.clearRect(col, row, 1, 1);
+        if (layerIndexBuffer && layerIndexBuffer.length === state.width * state.height) {
+          layerIndexBuffer[rowOffset + col] = 0;
+        }
       }
     }
   }
@@ -3452,6 +4055,7 @@ function beginSelectionMove(x, y, pointerId, target) {
   selectionState.moveOffsetX = 0;
   selectionState.moveOffsetY = 0;
   selectionState.moveCanvas = moveCanvas;
+  selectionState.moveIndexBuffer = moveIndexBuffer;
   selectionState.moveLayerId = layer.id;
   selectionState.moveInitialBounds = { minX, minY, maxX, maxY };
   selectionState.pointerId = pointerId;
@@ -3504,6 +4108,7 @@ function finalizeSelectionMove() {
   if (!targetLayer) {
     selectionState.isMoving = false;
     selectionState.moveCanvas = null;
+    selectionState.moveIndexBuffer = null;
     refreshSelectionContentPreview();
     releaseSelectionCapture();
     return;
@@ -3516,12 +4121,34 @@ function finalizeSelectionMove() {
     const destX = bounds.minX + offsetX;
     const destY = bounds.minY + offsetY;
     targetLayer.ctx.drawImage(selectionState.moveCanvas, destX, destY);
+    if (selectionState.moveIndexBuffer && targetLayer.indexBuffer) {
+      const indexBuffer = targetLayer.indexBuffer;
+      const selectionWidth = selectionState.moveCanvas.width;
+      const selectionHeight = selectionState.moveCanvas.height;
+      const canvasWidth = state.width;
+      for (let row = 0; row < selectionHeight; row += 1) {
+        const destRow = destY + row;
+        if (destRow < 0 || destRow >= state.height) {
+          continue;
+        }
+        const srcOffset = row * selectionWidth;
+        const destOffset = destRow * canvasWidth;
+        for (let col = 0; col < selectionWidth; col += 1) {
+          const destCol = destX + col;
+          if (destCol < 0 || destCol >= state.width) {
+            continue;
+          }
+          indexBuffer[destOffset + destCol] = selectionState.moveIndexBuffer[srcOffset + col];
+        }
+      }
+    }
   }
 
   selectionState.isMoving = false;
   selectionState.moveStart = null;
   selectionState.moveCanvas = null;
   selectionState.moveLayerId = null;
+  selectionState.moveIndexBuffer = null;
 
   if (bounds && (offsetX !== 0 || offsetY !== 0)) {
     const width = state.width;
@@ -3594,12 +4221,14 @@ function strokeSelectionPath(drawPath, lineJoin = 'miter', lineCap = 'square') {
 
 function getSelectionOutlineThickness() {
   const zoom = Math.max(state.zoom || 1, 0.01);
-  return SELECTION_OUTLINE_THICKNESS_PX / zoom;
+  const base = SELECTION_OUTLINE_THICKNESS_PX / zoom;
+  return Math.max(base, 1);
 }
 
 function getSelectionDashLength() {
   const zoom = Math.max(state.zoom || 1, 0.01);
-  return SELECTION_DASH_LENGTH_PX / zoom;
+  const base = SELECTION_DASH_LENGTH_PX / zoom;
+  return Math.max(base, 2);
 }
 
 function drawRectSelectionPreview() {
@@ -3770,6 +4399,15 @@ function updateRectSelection(x, y) {
     x: clampToCanvas(x, state.width - 1),
     y: clampToCanvas(y, state.height - 1),
   };
+  if (
+    selectionState.pendingClearClick !== null &&
+    selectionState.pendingClearClick === selectionState.pointerId &&
+    selectionState.dragStart &&
+    (selectionState.dragStart.x !== selectionState.dragCurrent.x ||
+      selectionState.dragStart.y !== selectionState.dragCurrent.y)
+  ) {
+    selectionState.pendingClearMoved = true;
+  }
   renderSelectionOverlay();
 }
 
@@ -3834,6 +4472,12 @@ function updateLassoSelection(canvasX, canvasY) {
   const dy = clampedY - lastPoint.y;
   if (Math.hypot(dx, dy) >= 0.25) {
     points.push({ x: clampedX, y: clampedY });
+    if (
+      selectionState.pendingClearClick !== null &&
+      selectionState.pendingClearClick === selectionState.pointerId
+    ) {
+      selectionState.pendingClearMoved = true;
+    }
     renderSelectionOverlay();
   }
 }
@@ -4153,13 +4797,20 @@ function updateVirtualCursorVisualPosition() {
   if (!virtualCursorElement || !virtualCursorState.enabled) {
     return;
   }
-  const pixelOffsetX = (virtualCursorState.x + 0.5) * state.pixelSize;
-  const pixelOffsetY = (virtualCursorState.y + 0.5) * state.pixelSize;
+  const fallbackX = virtualCursorState.x + 0.5;
+  const fallbackY = virtualCursorState.y + 0.5;
+  const visualX = Number.isFinite(virtualCursorState.visualX) ? virtualCursorState.visualX : fallbackX;
+  const visualY = Number.isFinite(virtualCursorState.visualY) ? virtualCursorState.visualY : fallbackY;
+  const clampedVisualX = clamp(visualX, 0, state.width);
+  const clampedVisualY = clamp(visualY, 0, state.height);
+  const pixelOffsetX = clampedVisualX * state.pixelSize;
+  const pixelOffsetY = clampedVisualY * state.pixelSize;
   virtualCursorElement.style.left = `${pixelOffsetX}px`;
   virtualCursorElement.style.top = `${pixelOffsetY}px`;
 }
 
 function updateVirtualCursorPosition(x, y, options = {}) {
+  const { silent = false, preserveVisual = false } = options;
   if (!virtualCursorState.enabled) {
     return;
   }
@@ -4167,9 +4818,16 @@ function updateVirtualCursorPosition(x, y, options = {}) {
   const clampedY = clamp(Math.round(y), 0, Math.max(0, state.height - 1));
   virtualCursorState.x = clampedX;
   virtualCursorState.y = clampedY;
+  if (!preserveVisual) {
+    virtualCursorState.visualX = clampedX + 0.5;
+    virtualCursorState.visualY = clampedY + 0.5;
+  }
   updateVirtualCursorVisualPosition();
-  if (!options.silent) {
+  if (!silent) {
     updateCursorInfo(clampedX, clampedY);
+  }
+  if (!virtualCursorState.drawActive) {
+    updateVirtualCursorHoverPreview();
   }
   if (virtualCursorState.drawActive) {
     const prevX = virtualCursorState.prevDrawX;
@@ -4255,6 +4913,7 @@ function endVirtualDrawing() {
   }
   clearVirtualCursorPreview();
   finalizeHistoryEntry();
+  updateVirtualCursorHoverPreview();
 }
 
 function continueVirtualDrawing() {
@@ -4321,23 +4980,31 @@ function setVirtualCursorEnabled(enabled) {
     return;
   }
   virtualCursorState.enabled = shouldEnable;
+  if (!virtualCursorElement || !virtualDrawControl) {
+    initVirtualCursorUI();
+  }
   if (virtualCursorToggle) {
     virtualCursorToggle.classList.toggle('tool-button--active', shouldEnable);
     virtualCursorToggle.setAttribute('aria-pressed', shouldEnable ? 'true' : 'false');
   }
-  flashDock('toolDock');
-  if (!virtualCursorElement || !virtualDrawControl) {
-    initVirtualCursorUI();
-  }
-  if (!HAS_TOUCH_SUPPORT) {
-    return;
-  }
   if (virtualCursorElement) {
-    virtualCursorElement.dataset.visible = shouldEnable ? 'true' : 'false';
+    if (HAS_TOUCH_SUPPORT) {
+      virtualCursorElement.dataset.visible = shouldEnable ? 'true' : 'false';
+    } else {
+      const shouldShowDesktop = shouldEnable && desktopVirtualCursorActive;
+      virtualCursorElement.dataset.visible = shouldShowDesktop ? 'true' : 'false';
+    }
   }
   if (virtualDrawControl) {
-    virtualDrawControl.dataset.visible = shouldEnable ? 'true' : 'false';
+    const shouldShowControl = shouldEnable && HAS_TOUCH_SUPPORT;
+    virtualDrawControl.dataset.visible = shouldShowControl ? 'true' : 'false';
   }
+  if (shouldEnable) {
+    updateVirtualCursorHoverPreview();
+  } else {
+    clearVirtualCursorPreview({ includeHover: true });
+  }
+  flashDock('toolDock');
   if (!shouldEnable) {
     if (
       virtualCursorState.pointerId !== null &&
@@ -4357,6 +5024,10 @@ function setVirtualCursorEnabled(enabled) {
     virtualCursorState.prevDrawX = null;
     virtualCursorState.prevDrawY = null;
     updateCursorInfo();
+    if (!HAS_TOUCH_SUPPORT) {
+      setDesktopVirtualCursorActive(false);
+      showCanvasCursor();
+    }
     return;
   }
   virtualCursorState.lastClientX = null;
@@ -4365,8 +5036,12 @@ function setVirtualCursorEnabled(enabled) {
   virtualCursorState.residualDY = 0;
   virtualCursorState.prevDrawX = null;
   virtualCursorState.prevDrawY = null;
-  updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: false });
+  updateVirtualCursorPosition(state.width / 2, state.height / 2, { silent: HAS_TOUCH_SUPPORT ? false : true });
   ensureVirtualControlPosition();
+  if (!HAS_TOUCH_SUPPORT) {
+    setDesktopVirtualCursorActive(false);
+    showCanvasCursor();
+  }
 }
 
 function initVirtualCursorUI() {
@@ -4376,7 +5051,16 @@ function initVirtualCursorUI() {
   virtualCursorElement = document.createElement('div');
   virtualCursorElement.className = 'virtual-cursor';
   virtualCursorElement.dataset.visible = 'false';
+  virtualCursorIconElement = document.createElement('img');
+  virtualCursorIconElement.className = 'virtual-cursor__icon';
+  virtualCursorIconElement.alt = '';
+  virtualCursorIconElement.setAttribute('aria-hidden', 'true');
+  virtualCursorIconElement.draggable = false;
+  virtualCursorIconElement.decoding = 'async';
+  virtualCursorIconElement.loading = 'lazy';
+  virtualCursorElement.appendChild(virtualCursorIconElement);
   canvasStage.appendChild(virtualCursorElement);
+  updateVirtualCursorIcon(state.tool);
 
   virtualDrawControl = document.createElement('div');
   virtualDrawControl.className = 'virtual-draw-control';
@@ -4933,6 +5617,352 @@ function rgbaToUint32(r, g, b, a) {
   return (alphaByte << 24) | (b << 16) | (g << 8) | r;
 }
 
+function packColorBytes(r, g, b, a) {
+  return ((a & 0xff) << 24) | ((b & 0xff) << 16) | ((g & 0xff) << 8) | (r & 0xff);
+}
+
+function premultiplyHexColor(hex, alpha = 1) {
+  const { r, g, b } = hexToRgb(hex);
+  const alphaByte = clamp(Math.round(alpha * 255), 0, 255);
+  if (alphaByte === 0) {
+    return { r: 0, g: 0, b: 0, a: 0, uint32: 0 };
+  }
+  const factor = alphaByte / 255;
+  const premultipliedR = clamp(Math.round(r * factor), 0, 255);
+  const premultipliedG = clamp(Math.round(g * factor), 0, 255);
+  const premultipliedB = clamp(Math.round(b * factor), 0, 255);
+  return {
+    r: premultipliedR,
+    g: premultipliedG,
+    b: premultipliedB,
+    a: alphaByte,
+    uint32: packColorBytes(premultipliedR, premultipliedG, premultipliedB, alphaByte),
+  };
+}
+
+function premultiplyComponents(r, g, b, alphaByte) {
+  if (alphaByte <= 0) {
+    return 0;
+  }
+  const factor = alphaByte / 255;
+  const premultipliedR = clamp(Math.round(r * factor), 0, 255);
+  const premultipliedG = clamp(Math.round(g * factor), 0, 255);
+  const premultipliedB = clamp(Math.round(b * factor), 0, 255);
+  return packColorBytes(premultipliedR, premultipliedG, premultipliedB, alphaByte);
+}
+
+function getPaletteEntryByIndex(index, paletteEntries = state.palette) {
+  if (!Array.isArray(paletteEntries) || paletteEntries.length === 0) {
+    return createTransparentPaletteEntry();
+  }
+  const clamped = clamp(index, 0, paletteEntries.length - 1);
+  return paletteEntries[clamped] || createTransparentPaletteEntry();
+}
+
+function redrawLayerFromIndexBuffer(layer, paletteEntries = state.palette) {
+  if (!layer || !layer.ctx || !(layer.indexBuffer instanceof Uint16Array)) {
+    return;
+  }
+  const width = layer.canvas?.width ?? state.width;
+  const height = layer.canvas?.height ?? state.height;
+  if (layer.indexBuffer.length !== width * height) {
+    return;
+  }
+  let imageData;
+  try {
+    imageData = layer.ctx.getImageData(0, 0, width, height);
+  } catch (error) {
+    return;
+  }
+  const data = imageData.data;
+  for (let pixelIndex = 0, dataIndex = 0; pixelIndex < layer.indexBuffer.length; pixelIndex += 1, dataIndex += 4) {
+    const entry = getPaletteEntryByIndex(layer.indexBuffer[pixelIndex], paletteEntries);
+    if (!entry) {
+      data[dataIndex] = 0;
+      data[dataIndex + 1] = 0;
+      data[dataIndex + 2] = 0;
+      data[dataIndex + 3] = 0;
+      continue;
+    }
+    const { r, g, b } = hexToRgb(entry.color);
+    const alphaByte = entry.storedAlphaByte ?? clamp(Math.round(entry.alpha * 255), 0, 255);
+    data[dataIndex] = r;
+    data[dataIndex + 1] = g;
+    data[dataIndex + 2] = b;
+    data[dataIndex + 3] = alphaByte;
+  }
+  layer.ctx.putImageData(imageData, 0, 0);
+  layer.hasContent = detectLayerHasContent(layer);
+}
+
+function redrawSnapshotLayerFromIndexBuffer(layer, paletteEntries = state.palette) {
+  if (!layer || !(layer.indexBuffer instanceof Uint16Array) || !(layer.imageData instanceof ImageData)) {
+    return;
+  }
+  const width = layer.imageData.width;
+  const height = layer.imageData.height;
+  if (layer.indexBuffer.length !== width * height) {
+    return;
+  }
+  const data = layer.imageData.data;
+  for (let pixelIndex = 0, dataIndex = 0; pixelIndex < layer.indexBuffer.length; pixelIndex += 1, dataIndex += 4) {
+    const entry = getPaletteEntryByIndex(layer.indexBuffer[pixelIndex], paletteEntries);
+    if (!entry) {
+      data[dataIndex] = 0;
+      data[dataIndex + 1] = 0;
+      data[dataIndex + 2] = 0;
+      data[dataIndex + 3] = 0;
+      continue;
+    }
+    const { r, g, b } = hexToRgb(entry.color);
+    const alphaByte = entry.storedAlphaByte ?? clamp(Math.round(entry.alpha * 255), 0, 255);
+    data[dataIndex] = r;
+    data[dataIndex + 1] = g;
+    data[dataIndex + 2] = b;
+    data[dataIndex + 3] = alphaByte;
+  }
+}
+
+function redrawAllLayersFromIndices(paletteEntries = state.palette) {
+  layersState.layers.forEach((layer) => {
+    redrawLayerFromIndexBuffer(layer, paletteEntries);
+  });
+  framesState.frames.forEach((frame) => {
+    if (!frame?.snapshot || !Array.isArray(frame.snapshot.layers)) {
+      return;
+    }
+    frame.snapshot.layers.forEach((layer) => {
+      redrawSnapshotLayerFromIndexBuffer(layer, paletteEntries);
+    });
+    frame.layerContent = computeFrameLayerContent(frame.snapshot);
+  });
+  if (selectionState.moveCanvas && selectionState.moveIndexBuffer instanceof Uint16Array) {
+    const width = selectionState.moveCanvas.width;
+    const height = selectionState.moveCanvas.height;
+    if (selectionState.moveIndexBuffer.length === width * height) {
+      const moveCtx = selectionState.moveCanvas.getContext('2d');
+      if (moveCtx) {
+        redrawLayerFromIndexBuffer(
+          {
+            ctx: moveCtx,
+            canvas: selectionState.moveCanvas,
+            indexBuffer: selectionState.moveIndexBuffer,
+          },
+          paletteEntries,
+        );
+      }
+    }
+  }
+}
+
+function unpackUint32Color(value) {
+  const r = value & 0xff;
+  const g = (value >> 8) & 0xff;
+  const b = (value >> 16) & 0xff;
+  const a = (value >> 24) & 0xff;
+  return { r, g, b, a };
+}
+
+function unpremultiplyColor(r, g, b, alphaByte) {
+  if (alphaByte <= 0) {
+    return { r: 0, g: 0, b: 0 };
+  }
+  const factor = 255 / alphaByte;
+  return {
+    r: clamp(Math.round(r * factor), 0, 255),
+    g: clamp(Math.round(g * factor), 0, 255),
+    b: clamp(Math.round(b * factor), 0, 255),
+  };
+}
+
+function createPaletteEntry(color, alpha = 1, storedUint32 = null) {
+  const normalized = normalizeHex(color);
+  if (typeof storedUint32 === 'number') {
+    const storedAlphaByte = (storedUint32 >>> 24) & 0xff;
+    const actualAlpha = clamp(storedAlphaByte / 255, 0, 1);
+    return {
+      color: normalized,
+      alpha: actualAlpha,
+      storedUint32,
+      storedAlphaByte,
+    };
+  }
+  const clampedAlpha = clamp(Number(alpha ?? 1), 0, 1);
+  if (clampedAlpha === 0) {
+    return createTransparentPaletteEntry();
+  }
+  const premult = premultiplyHexColor(normalized, clampedAlpha);
+  return {
+    color: normalized,
+    alpha: clampedAlpha,
+    storedUint32: premult.uint32,
+    storedAlphaByte: premult.a,
+  };
+}
+
+function findPaletteEntry(color, alpha = 1) {
+  const normalized = normalizeHex(color);
+  const clampedAlpha = clamp(Number(alpha ?? 1), 0, 1);
+  return state.palette.find(
+    (entry) => entry?.color === normalized && Math.abs((entry.alpha ?? 0) - clampedAlpha) <= 0.0005,
+  );
+}
+
+function ensurePaletteHasTransparentEntry(entries) {
+  const list = Array.isArray(entries) ? entries.slice() : [];
+  if (list.length === 0) {
+    list.push(createTransparentPaletteEntry());
+    return list;
+  }
+  let transparentIndex = -1;
+  for (let i = 0; i < list.length; i += 1) {
+    if (isTransparentPaletteEntry(list[i])) {
+      transparentIndex = i;
+      break;
+    }
+  }
+  if (transparentIndex === 0) {
+    return list;
+  }
+  const transparentEntry = transparentIndex >= 0 ? { ...list[transparentIndex] } : createTransparentPaletteEntry();
+  if (transparentIndex >= 0) {
+    list.splice(transparentIndex, 1);
+  }
+  list.unshift(transparentEntry);
+  return list;
+}
+
+function getPaletteIndexForColor(color, alpha = 1) {
+  const clampedAlpha = clamp(alpha, 0, 1);
+  if (clampedAlpha <= 0) {
+    return 0;
+  }
+  const normalized = normalizeHex(color);
+  for (let index = 0; index < state.palette.length; index += 1) {
+    const entry = state.palette[index];
+    if (!entry) {
+      continue;
+    }
+    if (entry.color === normalized && Math.abs((entry.alpha ?? 0) - clampedAlpha) <= 0.0005) {
+      return index;
+    }
+  }
+  return 0;
+}
+
+function seedColorLookupFromPalette(paletteEntries, lookup) {
+  if (!lookup) {
+    return;
+  }
+  if (!Array.isArray(paletteEntries)) {
+    return;
+  }
+  if (lookup.size > 0) {
+    return;
+  }
+  for (let index = 0; index < paletteEntries.length; index += 1) {
+    const entry = paletteEntries[index];
+    if (!entry || typeof entry.storedUint32 !== 'number') {
+      continue;
+    }
+    lookup.set(entry.storedUint32, index);
+  }
+}
+
+function resolvePaletteIndexFromPixel(r, g, b, alphaByte, paletteEntries = state.palette, lookup = indexedColorLookup) {
+  if (alphaByte <= 0) {
+    return 0;
+  }
+  if (!Array.isArray(paletteEntries) || paletteEntries.length === 0) {
+    return 0;
+  }
+  if (lookup === indexedColorLookup) {
+    if (lookup.size === 0) {
+      rebuildIndexedColorLookup();
+    }
+  } else {
+    seedColorLookupFromPalette(paletteEntries, lookup);
+  }
+  const stored = premultiplyComponents(r, g, b, alphaByte);
+  const cached = lookup?.get ? lookup.get(stored) : undefined;
+  if (typeof cached === 'number') {
+    return cached;
+  }
+  let bestIndex = 0;
+  let bestDistance = Infinity;
+  for (let index = 0; index < paletteEntries.length; index += 1) {
+    const entry = paletteEntries[index];
+    if (!entry) {
+      continue;
+    }
+    const entryStored = typeof entry.storedUint32 === 'number' ? entry.storedUint32 : null;
+    if (entryStored !== null && entryStored === stored) {
+      if (lookup && typeof lookup.set === 'function') {
+        lookup.set(stored, index);
+      }
+      return index;
+    }
+    const entryColor = hexToRgb(entry.color);
+    const entryAlphaByte = entry.storedAlphaByte ?? clamp(Math.round(entry.alpha * 255), 0, 255);
+    const dr = entryColor.r - r;
+    const dg = entryColor.g - g;
+    const db = entryColor.b - b;
+    const da = entryAlphaByte - alphaByte;
+    const distance = dr * dr + dg * dg + db * db + da * da;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+      if (distance === 0) {
+        break;
+      }
+    }
+  }
+  if (lookup && typeof lookup.set === 'function') {
+    lookup.set(stored, bestIndex);
+  }
+  return bestIndex;
+}
+
+function backfillLayerIndexBuffer(layer, paletteEntries = state.palette, lookup = indexedColorLookup) {
+  if (!layer || !layer.ctx) {
+    return;
+  }
+  if (!Array.isArray(paletteEntries) || paletteEntries.length === 0) {
+    return;
+  }
+  const canvasWidth = layer.canvas?.width ?? state.width;
+  const canvasHeight = layer.canvas?.height ?? state.height;
+  if (canvasWidth <= 0 || canvasHeight <= 0) {
+    return;
+  }
+  if (!(layer.indexBuffer instanceof Uint16Array) || layer.indexBuffer.length !== canvasWidth * canvasHeight) {
+    layer.indexBuffer = createIndexBuffer(canvasWidth, canvasHeight);
+  }
+  if (lookup === indexedColorLookup) {
+    rebuildIndexedColorLookup();
+  } else {
+    seedColorLookupFromPalette(paletteEntries, lookup);
+  }
+  let imageData;
+  try {
+    imageData = layer.ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+  } catch (error) {
+    return;
+  }
+  const data = imageData.data;
+  const buffer = layer.indexBuffer;
+  for (let pixelIndex = 0, dataIndex = 0; pixelIndex < buffer.length; pixelIndex += 1, dataIndex += 4) {
+    buffer[pixelIndex] = resolvePaletteIndexFromPixel(
+      data[dataIndex],
+      data[dataIndex + 1],
+      data[dataIndex + 2],
+      data[dataIndex + 3],
+      paletteEntries,
+      lookup,
+    );
+  }
+}
+
 function colorWithAlphaToHex8(hex, alpha = 1) {
   const { r, g, b } = hexToRgb(hex);
   const alphaByte = clamp(Math.round(alpha * 255), 0, 255).toString(16).padStart(2, '0');
@@ -5210,6 +6240,8 @@ function setActiveTool(tool) {
   flashDock('toolDock');
   scheduleDockAutoHide();
   applyToolAlphaOverrides(previousTool, tool);
+  updateVirtualCursorIcon(tool);
+  refreshHoverPreviews();
 }
 
 function applyToolAlphaOverrides(previousTool, nextTool) {
@@ -5239,6 +6271,9 @@ function setActiveColor(color, swatch = null, options = {}) {
   const { closePanel = true, alpha = null } = options;
   const normalized = normalizeHex(color);
   const candidateAlpha = alpha !== null ? clamp(Number(alpha), 0, 1) : null;
+  const previousStateAlpha = state.colorAlpha;
+  const previousSwatchColor = swatch ? normalizeHex(swatch.dataset.color || normalized) : null;
+  const previousSwatchAlpha = swatch ? Number(swatch.dataset.alpha ?? state.colorAlpha ?? 1) : null;
   if (!swatch) {
     const match = Array.from(paletteContainer.children).find((element) => {
       if (element.dataset.color !== normalized) {
@@ -5280,6 +6315,8 @@ function setActiveColor(color, swatch = null, options = {}) {
     const cssColor = colorToCss(normalized, state.colorAlpha);
     swatch.style.setProperty('--swatch-color', cssColor);
   }
+  const newSwatchColor = swatch ? normalizeHex(swatch.dataset.color || normalized) : null;
+  const newSwatchAlpha = swatch ? Number(swatch.dataset.alpha ?? state.colorAlpha ?? 1) : null;
   if (paletteEditorVisible && !paletteEditorPreventSync) {
     updatePaletteEditorControls(normalized, state.colorAlpha);
   }
@@ -5289,6 +6326,14 @@ function setActiveColor(color, swatch = null, options = {}) {
   updatePaletteDockStatus();
   flashDock('paletteDock');
   scheduleDockAutoHide();
+  const swatchMutated = swatch
+    ? previousSwatchColor !== newSwatchColor || Math.abs((previousSwatchAlpha ?? 0) - (newSwatchAlpha ?? 0)) > 0.0005
+    : false;
+  if (swatchMutated) {
+    const shouldRecolor = state.colorMode === 'indexed' && previousSwatchColor && newSwatchColor;
+    updatePaletteState({ skipRecolor: !shouldRecolor });
+  }
+  refreshHoverPreviews();
 }
 
 function hidePanel(panel) {
@@ -6000,6 +7045,7 @@ function swapSwatchColors(source, target) {
   } else if (activeSwatch === target) {
     setActiveColor(sourceColor, target, { closePanel: false });
   }
+  updatePaletteState();
 }
 
 function setupSwatchInteractions(button) {
@@ -6595,6 +7641,77 @@ function updatePaletteDockStatus() {
   paletteDockStatusSwatch.dataset.alpha = String(state.colorAlpha);
 }
 
+function getColorModeLabel(mode) {
+  return COLOR_MODE_LABELS[mode] || COLOR_MODE_LABELS[COLOR_MODE_DEFAULT] || 'RGB';
+}
+
+function updateColorModeInputs(mode) {
+  if (!colorModeInputs.length) {
+    return;
+  }
+  colorModeInputs.forEach((input) => {
+    const isMatch = input.value === mode;
+    input.checked = isMatch;
+    input.setAttribute('aria-checked', isMatch ? 'true' : 'false');
+    const parent = input.closest('.mini-radio');
+    if (parent) {
+      parent.classList.toggle('mini-radio--active', isMatch);
+    }
+  });
+}
+
+function setColorMode(mode, options = {}) {
+  const { skipSave = false, force = false, rebuildPalette = true } = options;
+  const normalized = COLOR_MODE_OPTIONS.includes(mode) ? mode : COLOR_MODE_DEFAULT;
+  if (!force && state.colorMode === normalized) {
+    updateColorModeInputs(normalized);
+    return;
+  }
+  state.colorMode = normalized;
+  updateColorModeInputs(normalized);
+  updateCanvasDockStatus();
+  if (rebuildPalette && !skipSave && !isRestoringState && normalized === 'indexed') {
+    rebuildPaletteFromCanvas({ skipSave });
+  }
+  if (!skipSave && !isRestoringState) {
+    queueStateSave();
+  }
+}
+
+function setCanvasConfigTab(tabId, options = {}) {
+  const { force = false, skipFocus = false } = options;
+  if (!tabId) {
+    return;
+  }
+  if (!force && tabId === activeCanvasTabId) {
+    return;
+  }
+  const targetButton = canvasTabButtons.find((button) => button.dataset.canvasTab === tabId);
+  const targetPanel = canvasTabPanels.find((panel) => panel.id === tabId);
+  if (!targetButton || !targetPanel) {
+    return;
+  }
+  activeCanvasTabId = tabId;
+  canvasTabButtons.forEach((button) => {
+    const isActive = button === targetButton;
+    button.classList.toggle('mini-tabs__tab--active', isActive);
+    button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    button.tabIndex = isActive ? 0 : -1;
+  });
+  canvasTabPanels.forEach((panel) => {
+    const isActive = panel === targetPanel;
+    panel.classList.toggle('mini-tab-panel--active', isActive);
+    if (isActive) {
+      panel.hidden = false;
+    } else {
+      panel.hidden = true;
+    }
+  });
+  if (!skipFocus && typeof targetButton.focus === 'function') {
+    targetButton.focus();
+  }
+}
+
 function updateCanvasDockStatus() {
   if (!canvasDockStatusText) {
     return;
@@ -6603,10 +7720,17 @@ function updateCanvasDockStatus() {
   const { width: baseWidth, height: baseHeight } = getBaseCanvasDimensions();
   const baseLabel = `${baseWidth}×${baseHeight}`;
   const pixelLabel = `${state.pixelScale}x`;
+  let statusText = sizeLabel;
   if (state.pixelScale > 1) {
-    canvasDockStatusText.textContent = `${baseLabel} → ${sizeLabel} (${pixelLabel})`;
-  } else {
-    canvasDockStatusText.textContent = sizeLabel;
+    statusText = `${baseLabel} → ${sizeLabel} (${pixelLabel})`;
+  }
+  const modeLabel = getColorModeLabel(state.colorMode);
+  if (modeLabel) {
+    statusText = `${statusText} · ${modeLabel}`;
+  }
+  canvasDockStatusText.textContent = statusText;
+  if (canvasDockStatusButton) {
+    canvasDockStatusButton.title = `${DOCK_LABELS.canvasDock} · ${statusText}`;
   }
 }
 
@@ -8001,6 +9125,7 @@ function updateBrushSize(value) {
   brushSizeDisplay.textContent = String(size);
   flashDock('toolDock');
   scheduleDockAutoHide();
+  refreshHoverPreviews();
 }
 
 function getBaseCanvasDimensions() {
@@ -8034,8 +9159,15 @@ function updatePixelSizeConstraints() {
   }
 }
 
+function resetCanvasViewState() {
+  userAdjustedZoom = false;
+  canvasAutoCentered = false;
+  state.offsetX = 0;
+  state.offsetY = 0;
+}
+
 function updatePixelSize(options = {}) {
-  const { skipComposite = false, preserveDimensions = false, skipSave = false } = options;
+  const { skipComposite = false, preserveDimensions = false, skipSave = false, resetView = false } = options;
   const min = Number(pixelSizeInput?.min) || pixelSizeMin;
   const { width: baseWidth, height: baseHeight } = getBaseCanvasDimensions();
   updatePixelSizeConstraints();
@@ -8050,11 +9182,17 @@ function updatePixelSize(options = {}) {
   const previousPixelSize = Math.max(1, state.pixelScale || 1);
   const pixelSizeChanged = previousPixelSize !== clamped;
   if (!pixelSizeChanged) {
+    if (resetView) {
+      resetCanvasViewState();
+    }
     applyCanvasDisplaySize();
     if (!userAdjustedZoom) {
       fitZoomToContainer();
     } else {
       applyCanvasZoom();
+    }
+    if (resetView) {
+      ensureCanvasCentered({ force: true });
     }
     updateCanvasDockStatus();
     return;
@@ -8070,8 +9208,12 @@ function updatePixelSize(options = {}) {
     resizeCanvas(targetWidth, targetHeight, {
       resample: true,
       skipComposite,
+      resetView,
     });
   } else {
+    if (resetView) {
+      resetCanvasViewState();
+    }
     applyCanvasDisplaySize();
     if (!userAdjustedZoom) {
       fitZoomToContainer();
@@ -8082,12 +9224,20 @@ function updatePixelSize(options = {}) {
       compositeLayers();
     }
     updateCanvasDockStatus();
+    const paletteSnapshot = capturePaletteSnapshot();
     framesState.frames.forEach((frame) => {
       if (frame && frame.snapshot) {
         frame.snapshot.pixelSize = clamped;
+        frame.snapshot.colorMode = state.colorMode;
+        frame.snapshot.color = state.color;
+        frame.snapshot.colorAlpha = state.colorAlpha;
+        frame.snapshot.palette = paletteSnapshot.map((entry) => ({ ...entry }));
       }
     });
     enforceHistoryMemoryBudget();
+    if (resetView) {
+      ensureCanvasCentered({ force: true });
+    }
   }
 
   if (!skipSave && preserveDimensions) {
@@ -8135,16 +9285,273 @@ function updatePreviewSize() {
   }
 }
 
-function initPalette() {
+function capturePaletteSnapshot() {
+  const snapshot = [];
+  const transparent = createTransparentPaletteEntry();
+  snapshot.push(transparent);
+  if (!paletteContainer) {
+    const existing = Array.isArray(state.palette) ? state.palette : [];
+    existing.forEach((entry) => {
+      if (!entry || isTransparentPaletteEntry(entry)) {
+        return;
+      }
+      snapshot.push({ ...entry });
+    });
+    return ensurePaletteHasTransparentEntry(snapshot);
+  }
+  const swatches = Array.from(paletteContainer.querySelectorAll('.swatch:not(.swatch--add)'));
+  swatches.forEach((swatch) => {
+    const color = normalizeHex(swatch.dataset.color || state.color);
+    const alpha = clamp(Number(swatch.dataset.alpha ?? 1), 0, 1);
+    const existing = findPaletteEntry(color, alpha);
+    const storedUint32 = existing?.storedUint32 ?? null;
+    const entry = createPaletteEntry(color, alpha, storedUint32);
+    if (!isTransparentPaletteEntry(entry)) {
+      snapshot.push(entry);
+    }
+  });
+  return ensurePaletteHasTransparentEntry(snapshot);
+}
+
+function palettesApproximatelyEqual(a, b) {
+  if (!a || !b || a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    const lhs = a[index];
+    const rhs = b[index];
+    if (!lhs || !rhs) {
+      return false;
+    }
+    if (lhs.color !== rhs.color) {
+      return false;
+    }
+    if (Math.abs((lhs.alpha ?? 0) - (rhs.alpha ?? 0)) > 0.0005) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function updatePaletteState(options = {}) {
+  const { skipSave = false, skipRecolor = false } = options;
+  const previousPalette = state.palette.map((entry) => ({ ...entry }));
+  const snapshot = capturePaletteSnapshot();
+  state.palette = ensurePaletteHasTransparentEntry(snapshot.map((entry) => ({ ...entry })));
+  rebuildIndexedColorLookup();
+
+  if (
+    !skipRecolor &&
+    !isRestoringState &&
+    state.colorMode === 'indexed' &&
+    previousPalette.length > 0 &&
+    !palettesApproximatelyEqual(previousPalette, state.palette)
+  ) {
+    const length = Math.min(previousPalette.length, state.palette.length);
+    for (let index = 0; index < length; index += 1) {
+      const prev = previousPalette[index];
+      const next = state.palette[index];
+      if (!prev || !next) {
+        continue;
+      }
+      const alphaChanged = Math.abs((prev.alpha ?? 0) - (next.alpha ?? 0)) > 0.0005;
+      if (prev.color !== next.color || alphaChanged) {
+        applyIndexedPaletteRecolor(prev.color, prev.alpha, next.color, next.alpha, prev.storedUint32, next.storedUint32);
+      }
+    }
+  }
+
+  if (!skipSave && !isRestoringState) {
+    queueStateSave();
+  }
+}
+
+function initPalette(paletteEntries = null, options = {}) {
+  const { activeColor = null, activeAlpha = null, skipSave = false } = options;
+  const hasPaletteData = Array.isArray(paletteEntries) && paletteEntries.length > 0;
+  const sourceEntries = hasPaletteData
+    ? paletteEntries
+    : defaultPalette.map((hex) => ({ color: hex, alpha: 1 }));
+  let entries = sourceEntries.map((entry) =>
+    createPaletteEntry(
+      entry?.color ?? state.color ?? defaultPalette[0],
+      entry?.alpha ?? 1,
+      typeof entry?.storedUint32 === 'number' ? entry.storedUint32 : null,
+    ),
+  );
+
+  entries = ensurePaletteHasTransparentEntry(entries);
+
+  state.palette = entries.map((entry) => ({ ...entry }));
+  rebuildIndexedColorLookup();
+
+  if (!paletteContainer) {
+    return;
+  }
+
   paletteContainer.innerHTML = '';
   addPaletteButton = null;
-  defaultPalette.forEach((hex) => {
-    const button = createPaletteSwatch(hex, 1);
+  entries.forEach((entry) => {
+    if (isTransparentPaletteEntry(entry)) {
+      return;
+    }
+    const button = createPaletteSwatch(entry.color, entry.alpha);
     paletteContainer.appendChild(button);
   });
   ensurePaletteAddButton();
-  setActiveColor(state.color || defaultPalette[0], null, { closePanel: false, alpha: state.colorAlpha });
+
+  const desiredColor = activeColor ? normalizeHex(activeColor) : normalizeHex(state.color || entries[0]?.color || defaultPalette[0]);
+  const matchingEntry = entries.find((entry) => entry.color === desiredColor) || entries[0] || null;
+  const resolvedAlpha = clamp(
+    Number.isFinite(activeAlpha) ? Number(activeAlpha) : matchingEntry?.alpha ?? state.colorAlpha ?? 1,
+    0,
+    1,
+  );
+
+  setActiveColor(desiredColor, null, { closePanel: false, alpha: resolvedAlpha });
   updatePaletteDockStatus();
+  updatePaletteAddButtonState();
+  updatePaletteState({ skipSave: skipSave || isRestoringState, skipRecolor: true });
+}
+
+function replaceColorInImageData(imageData, fromUint32, toUint32, toAlphaByte = 255) {
+  if (!imageData || !imageData.data || imageData.data.length === 0) {
+    return { changed: false, hasContent: false };
+  }
+  const pixels = new Uint32Array(imageData.data.buffer);
+  let changed = false;
+  let hasContent = false;
+  for (let index = 0; index < pixels.length; index += 1) {
+    const current = pixels[index];
+    if (current === fromUint32) {
+      pixels[index] = toUint32;
+      changed = true;
+    }
+    if (!hasContent && (pixels[index] >>> 24) !== 0) {
+      hasContent = true;
+    }
+  }
+  if (!hasContent && changed && toAlphaByte !== 0) {
+    hasContent = true;
+  }
+  return { changed, hasContent };
+}
+
+function replaceColorInContext(ctx, width, height, fromUint32, toUint32, toAlphaByte = 255) {
+  if (!ctx || width <= 0 || height <= 0) {
+    return false;
+  }
+  let imageData;
+  try {
+    imageData = ctx.getImageData(0, 0, width, height);
+  } catch (error) {
+    return false;
+  }
+  const { changed } = replaceColorInImageData(imageData, fromUint32, toUint32, toAlphaByte);
+  if (!changed) {
+    return false;
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return true;
+}
+
+function applyIndexedPaletteRecolor(fromHex, fromAlpha, toHex, toAlpha, fromStoredUint32 = null, toStoredUint32 = null) {
+  if (state.colorMode !== 'indexed') {
+    return;
+  }
+  if (!fromHex || !toHex) {
+    return;
+  }
+  redrawAllLayersFromIndices();
+  markHistoryDirty();
+  compositeLayers({ skipContentCheck: true });
+  refreshSelectionContentPreview();
+  renderSelectionOverlay();
+  finalizeHistoryEntry({ force: true });
+}
+
+function rebuildPaletteFromCanvas(options = {}) {
+  const { skipSave = false } = options;
+  if (!pixelCanvas || state.width <= 0 || state.height <= 0) {
+    return;
+  }
+
+  compositeLayers({ skipUIUpdate: true, skipContentCheck: true });
+  let imageData;
+  try {
+    imageData = ctx.getImageData(0, 0, state.width, state.height);
+  } catch (error) {
+    return;
+  }
+
+  const { data } = imageData;
+  const colorUsage = new Map();
+  for (let index = 0; index < data.length; index += 4) {
+    const alphaByte = data[index + 3];
+    if (alphaByte === 0) {
+      continue;
+    }
+    const r = data[index];
+    const g = data[index + 1];
+    const b = data[index + 2];
+    const key = `${r},${g},${b},${alphaByte}`;
+    const entry = colorUsage.get(key);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      colorUsage.set(key, {
+        r,
+        g,
+        b,
+        alphaByte,
+        count: 1,
+      });
+    }
+  }
+
+  if (colorUsage.size === 0) {
+    return;
+  }
+
+  const sorted = Array.from(colorUsage.values()).sort((a, b) => b.count - a.count);
+  const paletteEntries = [];
+  const seenKeys = new Set();
+  const limit = Math.min(MAX_PALETTE_COLORS, sorted.length);
+  for (let i = 0; i < limit && paletteEntries.length < MAX_PALETTE_COLORS; i += 1) {
+    const { r, g, b, alphaByte } = sorted[i];
+    const alpha = clamp(alphaByte / 255, 0, 1);
+    const unpremultiplied = unpremultiplyColor(r, g, b, alphaByte);
+    const hex = normalizeHex(rgbToHex(unpremultiplied.r, unpremultiplied.g, unpremultiplied.b));
+    const storedUint32 = packColorBytes(r, g, b, alphaByte);
+    const key = storedUint32;
+    if (seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    const entry = createPaletteEntry(hex, alpha, storedUint32);
+    paletteEntries.push(entry);
+  }
+
+  const normalizedCurrentColor = normalizeHex(state.color);
+  const currentAlpha = clamp(Math.round(state.colorAlpha * 1000) / 1000, 0, 1);
+  const hasCurrentColor = paletteEntries.some(
+    (entry) => entry.color === normalizedCurrentColor && Math.abs(entry.alpha - currentAlpha) <= 0.0005,
+  );
+  if (!hasCurrentColor) {
+    const entry = createPaletteEntry(normalizedCurrentColor, currentAlpha);
+    paletteEntries.unshift(entry);
+    if (paletteEntries.length > MAX_PALETTE_COLORS) {
+      paletteEntries.length = MAX_PALETTE_COLORS;
+    }
+  }
+
+  const ensuredPalette = ensurePaletteHasTransparentEntry(paletteEntries);
+  initPalette(paletteEntries, {
+    activeColor: normalizedCurrentColor,
+    activeAlpha: currentAlpha,
+    skipSave,
+  });
+  return ensuredPalette;
 }
 
 function createPaletteSwatch(hex, alpha = 1) {
@@ -8206,6 +9613,7 @@ function addPaletteColor() {
   }
   setActiveColor(normalized, button, { closePanel: false, alpha: state.colorAlpha });
   updatePaletteAddButtonState();
+  updatePaletteState();
 }
 
 function getPaletteColorCount() {
@@ -8222,6 +9630,16 @@ function updatePaletteAddButtonState() {
   const canAdd = getPaletteColorCount() < MAX_PALETTE_COLORS;
   addPaletteButton.disabled = !canAdd;
   addPaletteButton.setAttribute('aria-disabled', canAdd ? 'false' : 'true');
+}
+
+function rebuildIndexedColorLookup() {
+  indexedColorLookup.clear();
+  state.palette.forEach((entry, index) => {
+    if (!entry || typeof entry.storedUint32 !== 'number') {
+      return;
+    }
+    indexedColorLookup.set(entry.storedUint32, index);
+  });
 }
 
 function getPointerPosition(event) {
@@ -8252,17 +9670,24 @@ function applyBrush(x, y, handler) {
   return applied;
 }
 
-function drawBrush(x, y, targetCtx = null) {
-  const activeLayer = targetCtx ? null : getActiveLayer();
-  const context = targetCtx || activeLayer?.ctx;
+function drawBrush(x, y, targetCtx = null, targetLayer = null) {
+  const layer = targetLayer || (targetCtx ? getActiveLayer() : getActiveLayer());
+  const context = targetCtx || layer?.ctx;
   if (!context) {
     return;
   }
+  const indexBuffer = layer?.indexBuffer;
+  const width = state.width;
+  const paletteIndex = getPaletteIndexForColor(state.color, state.colorAlpha);
   context.fillStyle = colorToCss(state.color, state.colorAlpha);
   const applied = applyBrush(x, y, (px, py) => {
     context.fillRect(px, py, 1, 1);
+    if (indexBuffer && px >= 0 && px < width && py >= 0 && py < state.height) {
+      indexBuffer[py * width + px] = paletteIndex;
+    }
   });
-  if (applied) {
+  const shouldMarkHistory = !targetCtx || targetLayer === layer;
+  if (applied && shouldMarkHistory) {
     markHistoryDirty();
   }
 }
@@ -8302,23 +9727,29 @@ function drawLine(x0, y0, x1, y1, usePen = true) {
   const layerCtx = activeLayer.ctx;
   drawLinePixels(x0, y0, x1, y1, (currentX, currentY) => {
     if (usePen) {
-      drawBrush(currentX, currentY, layerCtx);
+      drawBrush(currentX, currentY, layerCtx, activeLayer);
     } else {
-      eraseBrush(currentX, currentY, layerCtx);
+      eraseBrush(currentX, currentY, layerCtx, activeLayer);
     }
   });
 }
 
-function eraseBrush(x, y, targetCtx = null) {
-  const activeLayer = targetCtx ? null : getActiveLayer();
-  const context = targetCtx || activeLayer?.ctx;
+function eraseBrush(x, y, targetCtx = null, targetLayer = null) {
+  const layer = targetLayer || (targetCtx ? getActiveLayer() : getActiveLayer());
+  const context = targetCtx || layer?.ctx;
   if (!context) {
     return;
   }
+  const indexBuffer = layer?.indexBuffer;
+  const width = state.width;
   const applied = applyBrush(x, y, (px, py) => {
     context.clearRect(px, py, 1, 1);
+    if (indexBuffer && px >= 0 && px < width && py >= 0 && py < state.height) {
+      indexBuffer[py * width + px] = 0;
+    }
   });
-  if (applied) {
+  const shouldMarkHistory = !targetCtx || targetLayer === layer;
+  if (applied && shouldMarkHistory) {
     markHistoryDirty();
   }
 }
@@ -8365,6 +9796,7 @@ function floodFill(x, y, hexColor) {
   if (targetColor === fillColor) {
     return;
   }
+  const paletteIndex = getPaletteIndexForColor(hexColor, state.colorAlpha);
   const stack = [x, y];
   floodFillState.task = {
     layerCtx,
@@ -8378,6 +9810,8 @@ function floodFill(x, y, hexColor) {
     height,
     changed: false,
     raf: null,
+    indexBuffer: activeLayer.indexBuffer,
+    paletteIndex,
   };
   processFloodFillChunk();
 }
@@ -8411,7 +9845,7 @@ function renderPreview() {
 }
 
 function resizeCanvas(newWidth, newHeight, options = {}) {
-  const { resample = false, skipComposite = false, skipHistory = false } = options;
+  const { resample = false, skipComposite = false, skipHistory = false, resetView = false } = options;
   const clampedWidth = clamp(newWidth, Number(widthInput.min), Number(widthInput.max));
   const clampedHeight = clamp(newHeight, Number(heightInput.min), Number(heightInput.max));
   const oldWidth = state.width;
@@ -8437,15 +9871,38 @@ function resizeCanvas(newWidth, newHeight, options = {}) {
     layer.canvas.width = clampedWidth;
     layer.canvas.height = clampedHeight;
     layer.ctx.imageSmoothingEnabled = false;
+    const oldIndexBuffer = layer.indexBuffer;
+    const newIndexBuffer = createIndexBuffer(clampedWidth, clampedHeight);
     if (sourceCtx) {
       if (resample) {
         layer.ctx.drawImage(sourceCanvas, 0, 0, oldWidth, oldHeight, 0, 0, clampedWidth, clampedHeight);
+        if (oldIndexBuffer?.length === oldWidth * oldHeight) {
+          const scaleX = oldWidth / clampedWidth;
+          const scaleY = oldHeight / clampedHeight;
+          for (let y = 0; y < clampedHeight; y += 1) {
+            const srcY = Math.min(oldHeight - 1, Math.floor(y * scaleY));
+            for (let x = 0; x < clampedWidth; x += 1) {
+              const srcX = Math.min(oldWidth - 1, Math.floor(x * scaleX));
+              newIndexBuffer[y * clampedWidth + x] = oldIndexBuffer[srcY * oldWidth + srcX];
+            }
+          }
+        }
       } else {
         const copyWidth = Math.min(clampedWidth, oldWidth);
         const copyHeight = Math.min(clampedHeight, oldHeight);
         layer.ctx.drawImage(sourceCanvas, 0, 0, copyWidth, copyHeight, 0, 0, copyWidth, copyHeight);
+        if (oldIndexBuffer?.length === oldWidth * oldHeight) {
+          for (let y = 0; y < copyHeight; y += 1) {
+            const srcOffset = y * oldWidth;
+            const destOffset = y * clampedWidth;
+            for (let x = 0; x < copyWidth; x += 1) {
+              newIndexBuffer[destOffset + x] = oldIndexBuffer[srcOffset + x];
+            }
+          }
+        }
       }
     }
+    layer.indexBuffer = newIndexBuffer;
     layer.hasContent = detectLayerHasContent(layer);
   });
 
@@ -8458,6 +9915,9 @@ function resizeCanvas(newWidth, newHeight, options = {}) {
   widthInput.value = String(clampedWidth);
   heightInput.value = String(clampedHeight);
   clearSelection({ silent: true });
+  if (resetView) {
+    resetCanvasViewState();
+  }
   applyCanvasDisplaySize();
   if (!userAdjustedZoom) {
     fitZoomToContainer();
@@ -8470,10 +9930,15 @@ function resizeCanvas(newWidth, newHeight, options = {}) {
     compositeLayers();
   }
   refreshExportOptions();
+  const paletteSnapshot = capturePaletteSnapshot();
   framesState.frames.forEach((frame) => {
     if (frame && frame.snapshot) {
       resizeSnapshot(frame.snapshot, clampedWidth, clampedHeight, { resample });
       frame.snapshot.pixelSize = state.pixelScale;
+      frame.snapshot.colorMode = state.colorMode;
+      frame.snapshot.color = state.color;
+      frame.snapshot.colorAlpha = state.colorAlpha;
+      frame.snapshot.palette = paletteSnapshot.map((entry) => ({ ...entry }));
       frame.layerContent = computeFrameLayerContent(frame.snapshot);
     }
   });
@@ -8501,6 +9966,9 @@ function clearCanvas() {
   markHistoryDirty();
   layersState.layers.forEach((layer) => {
     layer.ctx.clearRect(0, 0, state.width, state.height);
+    if (layer.indexBuffer) {
+      layer.indexBuffer.fill(0);
+    }
   });
   compositeLayers();
   finalizeHistoryEntry();
@@ -8904,11 +10372,35 @@ function exportGif(multiplier = 1) {
 
 let previousPointer = { x: 0, y: 0, inBounds: false };
 
+function handleCanvasPointerEnter(event) {
+  if (!event || (event.pointerType !== 'mouse' && event.pointerType !== 'pen')) {
+    return;
+  }
+  if (!virtualCursorState.enabled) {
+    return;
+  }
+  hideCanvasCursor();
+  const position = getPointerPosition(event);
+  if (position.inBounds) {
+    setDesktopVirtualCursorActive(true);
+    setVirtualCursorVisualCoordinates(position.canvasX, position.canvasY);
+    updatePointerHoverPreviewFromEvent(event, position);
+  } else {
+    setVirtualCursorVisualCoordinates(position.canvasX, position.canvasY);
+    updatePointerHoverPreviewFromEvent(event, position);
+  }
+}
+
 function handlePointerDown(event) {
   if (playbackState.playing) {
     stopFramePlayback();
   }
   event.preventDefault();
+  pointerHoverState.active = false;
+  pointerHoverState.x = null;
+  pointerHoverState.y = null;
+  pointerHoverState.pointerType = null;
+  clearPointerPreview();
   if (virtualCursorState.enabled && event.pointerType === 'touch') {
     if (zoomPointers.size >= 2) {
       return;
@@ -8941,6 +10433,17 @@ function handlePointerDown(event) {
   }
   const position = getPointerPosition(event);
   const { x, y, inBounds, canvasX, canvasY } = position;
+  if (virtualCursorState.enabled && (event.pointerType === 'mouse' || event.pointerType === 'pen')) {
+    if (inBounds) {
+      hideCanvasCursor();
+      setDesktopVirtualCursorActive(true);
+      setVirtualCursorVisualCoordinates(canvasX, canvasY);
+      updateVirtualCursorPosition(x, y, { silent: true, preserveVisual: true });
+    } else {
+      showCanvasCursor();
+      setDesktopVirtualCursorActive(false);
+    }
+  }
   if (isShapeTool(state.tool)) {
     if (inBounds) {
       const started = beginShapeDrawing(x, y, event.pointerId, pixelCanvas);
@@ -8953,6 +10456,32 @@ function handlePointerDown(event) {
     }
     return;
   }
+  if (isSelectionTool(state.tool)) {
+    if (hasActiveSelection() && !selectionState.isDragging && !selectionState.isMoving) {
+      if (!inBounds) {
+        clearSelection();
+        return;
+      }
+      if (!isPixelSelected(x, y)) {
+        clearSelection();
+        selectionState.pendingClearClick = event.pointerId;
+        selectionState.pendingClearMoved = false;
+        if (state.tool === 'selectMagic') {
+          return;
+        }
+      } else {
+        selectionState.pendingClearClick = null;
+        selectionState.pendingClearMoved = false;
+      }
+    } else {
+      selectionState.pendingClearClick = null;
+      selectionState.pendingClearMoved = false;
+    }
+  } else {
+    selectionState.pendingClearClick = null;
+    selectionState.pendingClearMoved = false;
+  }
+
   if (
     inBounds &&
     isSelectionTool(state.tool) &&
@@ -8969,7 +10498,15 @@ function handlePointerDown(event) {
   }
   if (state.tool === 'selectRect') {
     if (inBounds) {
+      const pendingPointerId = selectionState.pendingClearClick;
       beginRectSelection(x, y, event.pointerId, pixelCanvas);
+      if (
+        pendingPointerId !== null &&
+        event.pointerId === pendingPointerId
+      ) {
+        selectionState.pendingClearClick = pendingPointerId;
+        selectionState.pendingClearMoved = false;
+      }
     } else {
       clearSelection();
     }
@@ -8977,7 +10514,15 @@ function handlePointerDown(event) {
   }
   if (state.tool === 'selectLasso') {
     if (inBounds) {
+      const pendingPointerId = selectionState.pendingClearClick;
       beginLassoSelection(canvasX, canvasY, event.pointerId, pixelCanvas);
+      if (
+        pendingPointerId !== null &&
+        event.pointerId === pendingPointerId
+      ) {
+        selectionState.pendingClearClick = pendingPointerId;
+        selectionState.pendingClearMoved = false;
+      }
     } else {
       clearSelection();
     }
@@ -9033,12 +10578,20 @@ function handlePointerDown(event) {
 }
 
 function handlePointerMove(event) {
+  let sharedPointerPosition = null;
+  if (event.pointerType === 'mouse' || event.pointerType === 'pen') {
+    sharedPointerPosition = getPointerPosition(event);
+    setVirtualCursorVisualCoordinates(sharedPointerPosition.canvasX, sharedPointerPosition.canvasY);
+    updatePointerHoverPreviewFromEvent(event, sharedPointerPosition);
+  } else {
+    updatePointerHoverPreviewFromEvent(event);
+  }
   if (panState.active && event.pointerId === panState.pointerId) {
     updateCanvasPan(event);
     return;
   }
   if (shapeState.active && event.pointerId === shapeState.pointerId) {
-    const position = getPointerPosition(event);
+    const position = sharedPointerPosition || getPointerPosition(event);
     updateShapeDrawing(position.x, position.y);
     if (position.inBounds) {
       updateCursorInfo(position.x, position.y);
@@ -9046,7 +10599,7 @@ function handlePointerMove(event) {
     return;
   }
   if (selectionState.isMoving && event.pointerId === selectionState.pointerId) {
-    const position = getPointerPosition(event);
+    const position = sharedPointerPosition || getPointerPosition(event);
     updateSelectionMove(position.x, position.y);
     if (position.inBounds) {
       updateCursorInfo(position.x, position.y);
@@ -9054,7 +10607,7 @@ function handlePointerMove(event) {
     return;
   }
   if (selectionState.isDragging && event.pointerId === selectionState.pointerId) {
-    const position = getPointerPosition(event);
+    const position = sharedPointerPosition || getPointerPosition(event);
     if (selectionState.mode === 'selectRect') {
       updateRectSelection(position.x, position.y);
     } else if (selectionState.mode === 'selectLasso') {
@@ -9106,7 +10659,17 @@ function handlePointerMove(event) {
   if (event.pointerType === 'touch' && zoomPointers.size >= 2) {
     return;
   }
-  const { x, y, inBounds } = getPointerPosition(event);
+  const { x, y, inBounds } = sharedPointerPosition || getPointerPosition(event);
+  if (virtualCursorState.enabled && (event.pointerType === 'mouse' || event.pointerType === 'pen')) {
+    if (inBounds) {
+      hideCanvasCursor();
+      setDesktopVirtualCursorActive(true);
+      updateVirtualCursorPosition(x, y, { silent: true, preserveVisual: true });
+    } else {
+      showCanvasCursor();
+      setDesktopVirtualCursorActive(false);
+    }
+  }
   if (inBounds) {
     updateCursorInfo(x, y);
   } else if (!isDrawing) {
@@ -9160,7 +10723,31 @@ function handlePointerUp(event) {
     return;
   }
   if (handledSelection) {
+    if (
+      event &&
+      selectionState.pendingClearClick !== null &&
+      event.pointerId === selectionState.pendingClearClick
+    ) {
+      if (!selectionState.pendingClearMoved) {
+        clearSelection();
+      } else {
+        selectionState.pendingClearClick = null;
+        selectionState.pendingClearMoved = false;
+      }
+    }
     return;
+  }
+  if (
+    event &&
+    selectionState.pendingClearClick !== null &&
+    event.pointerId === selectionState.pendingClearClick
+  ) {
+    if (!selectionState.pendingClearMoved) {
+      clearSelection();
+      return;
+    }
+    selectionState.pendingClearClick = null;
+    selectionState.pendingClearMoved = false;
   }
   if (panEnded) {
     return;
@@ -9200,16 +10787,46 @@ function handlePointerUp(event) {
     queueCompositeLayers({ skipUIUpdate: false, skipContentCheck: false });
   }
   finalizeHistoryEntry();
+  if (event) {
+    if (event.pointerType === 'mouse' || event.pointerType === 'pen') {
+      const position = getPointerPosition(event);
+      if (virtualCursorState.enabled) {
+        if (position.inBounds) {
+          hideCanvasCursor();
+          setDesktopVirtualCursorActive(true);
+    updateVirtualCursorPosition(position.x, position.y, { silent: true, preserveVisual: true });
+        } else {
+          showCanvasCursor();
+          setDesktopVirtualCursorActive(false);
+        }
+      }
+      updatePointerHoverPreviewFromEvent(event, position);
+    } else {
+      updatePointerHoverPreviewFromEvent(event);
+    }
+  } else {
+    updatePointerHoverPreviewFromState();
+  }
 }
 
 function initEvents() {
   pixelCanvas.addEventListener('pointerdown', handlePointerDown);
   pixelCanvas.addEventListener('pointermove', handlePointerMove);
   pixelCanvas.addEventListener('pointerup', handlePointerUp);
-  pixelCanvas.addEventListener('pointerleave', () => {
+  pixelCanvas.addEventListener('pointerenter', handleCanvasPointerEnter);
+  pixelCanvas.addEventListener('pointerleave', (event) => {
     if (!isDrawing) {
       updateCursorInfo();
     }
+    if (event && (event.pointerType === 'mouse' || event.pointerType === 'pen')) {
+      showCanvasCursor();
+      setDesktopVirtualCursorActive(false);
+    }
+    pointerHoverState.active = false;
+    pointerHoverState.x = null;
+    pointerHoverState.y = null;
+    pointerHoverState.pointerType = null;
+    clearPointerPreview();
   });
   pixelCanvas.addEventListener('pointercancel', handlePointerUp);
   window.addEventListener('pointerup', handlePointerUp);
@@ -9228,8 +10845,41 @@ function initEvents() {
   });
 
   if (pixelSizeInput) {
-    pixelSizeInput.addEventListener('input', () => updatePixelSize());
-    pixelSizeInput.addEventListener('change', () => updatePixelSize());
+    pixelSizeInput.addEventListener('input', () => updatePixelSize({ resetView: true }));
+    pixelSizeInput.addEventListener('change', () => updatePixelSize({ resetView: true }));
+  }
+
+  if (canvasTabButtons.length) {
+    canvasTabButtons.forEach((button, index) => {
+      button.addEventListener('click', () => {
+        setCanvasConfigTab(button.dataset.canvasTab);
+      });
+      button.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') {
+          return;
+        }
+        event.preventDefault();
+        const delta = event.key === 'ArrowRight' ? 1 : -1;
+        const nextIndex = (index + delta + canvasTabButtons.length) % canvasTabButtons.length;
+        const nextButton = canvasTabButtons[nextIndex];
+        if (nextButton) {
+          setCanvasConfigTab(nextButton.dataset.canvasTab, { skipFocus: true });
+          nextButton.focus();
+        }
+      });
+    });
+    setCanvasConfigTab(activeCanvasTabId, { force: true, skipFocus: true });
+  }
+
+  if (colorModeInputs.length) {
+    colorModeInputs.forEach((input) => {
+      input.addEventListener('change', () => {
+        if (input.checked) {
+          setColorMode(input.value);
+        }
+      });
+    });
+    setColorMode(state.colorMode, { skipSave: true, force: true, rebuildPalette: false });
   }
 
   if (historyLimitInput) {
@@ -9243,7 +10893,7 @@ function initEvents() {
   resizeCanvasButton.addEventListener('click', () => {
     const newWidth = Number(widthInput.value) || state.width;
     const newHeight = Number(heightInput.value) || state.height;
-    resizeCanvas(newWidth, newHeight);
+    resizeCanvas(newWidth, newHeight, { resetView: true });
   });
 
   clearCanvasButton.addEventListener('click', () => {
@@ -9392,16 +11042,10 @@ function initEvents() {
       setDockCollapsed(!dockCollapsed);
     });
   }
-
-  if (virtualCursorToggle) {
-    virtualCursorToggle.addEventListener('click', () => {
-      setVirtualCursorEnabled(!virtualCursorState.enabled);
-    });
-  }
 }
 
 async function init() {
-  pixelCanvas.style.cursor = 'crosshair';
+  pixelCanvas.style.cursor = CANVAS_CURSOR_VISIBLE;
   pixelCanvas.style.touchAction = 'none';
   initPalette();
   initVirtualCursorUI();
@@ -9423,8 +11067,24 @@ async function init() {
   setActiveTool(state.tool);
   applyToolAlphaOverrides(null, state.tool);
   if (virtualCursorToggle) {
-    virtualCursorToggle.setAttribute('aria-pressed', 'false');
+    if (HAS_TOUCH_SUPPORT) {
+      virtualCursorToggle.disabled = false;
+      virtualCursorToggle.removeAttribute('hidden');
+      virtualCursorToggle.removeAttribute('aria-hidden');
+      virtualCursorToggle.removeAttribute('tabindex');
+      virtualCursorToggle.classList.remove('tool-button--disabled');
+      virtualCursorToggle.addEventListener('click', () => {
+        setVirtualCursorEnabled(!virtualCursorState.enabled);
+      });
+    } else {
+      virtualCursorToggle.disabled = true;
+      virtualCursorToggle.setAttribute('aria-hidden', 'true');
+      virtualCursorToggle.setAttribute('hidden', 'true');
+      virtualCursorToggle.setAttribute('tabindex', '-1');
+      virtualCursorToggle.classList.add('tool-button--disabled');
+    }
   }
+  setVirtualCursorEnabled(true);
   if (deleteFrameButton) {
     deleteFrameButton.addEventListener('click', () => {
       deleteActiveFrame();
