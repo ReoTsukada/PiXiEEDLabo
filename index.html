@@ -65,7 +65,7 @@
                   aria-expanded="false"
                 >
                   <span class="mini-dock__status-icon">
-                    <img id="toolDockStatus" src="assets/icons/tool-pen-new.svg" alt="選択中のツール" width="22" height="22" />
+                    <img id="toolDockStatus" src="assets/icons/tool-pencil.png" alt="選択中のツール" width="22" height="22" />
                   </span>
                 </button>
                 <div class="mini-dock__drag" id="toolDockDrag" aria-hidden="true" title="ドラッグで移動">
@@ -75,11 +75,11 @@
               </div>
               <div class="mini-dock__body">
                 <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="描画ツール">
-                  <button class="mini-button tool-button tool-button--active" type="button" data-tool="pen" data-icon="assets/icons/tool-pen-new.svg" aria-label="ペン">
-                    <img src="assets/icons/tool-pen-new.svg" alt="ペン" width="32" height="32" />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-tool="pencil" data-icon="assets/icons/tool-pencil.png" aria-label="鉛筆">
+                  <button class="mini-button tool-button tool-button--active" type="button" data-tool="pencil" data-icon="assets/icons/tool-pencil.png" aria-label="鉛筆">
                     <img src="assets/icons/tool-pencil.png" alt="鉛筆" width="32" height="32" />
+                  </button>
+                  <button class="mini-button tool-button" type="button" data-tool="pen" data-icon="assets/icons/tool-pen-new.svg" aria-label="ペン">
+                    <img src="assets/icons/tool-pen-new.svg" alt="ペン" width="32" height="32" />
                   </button>
                   <button class="mini-button tool-button" type="button" data-tool="eraser" data-icon="assets/icons/tool-eraser.png" aria-label="消しゴム">
                     <img src="assets/icons/tool-eraser.png" alt="消しゴム" width="32" height="32" />
@@ -207,7 +207,10 @@
                   aria-label="レイヤーパネルを展開"
                   aria-expanded="false"
                 >
-                  <span class="mini-dock__status-text" id="layerDockStatus">レイヤー1</span>
+                  <span class="mini-dock__status-icon">
+                    <img src="assets/icons/menu-frame.png" alt="" width="22" height="22" />
+                  </span>
+                  <span class="sr-only" id="layerDockStatus">レイヤー1</span>
                 </button>
                 <div class="mini-dock__drag" id="layerDockDrag" aria-hidden="true" title="ドラッグで移動">
                   <span class="mini-dock__drag-line"></span>
@@ -216,14 +219,16 @@
               <div class="mini-dock__body">
                 <div class="layer-dock" aria-label="レイヤー操作" data-layer-dock>
                   <div class="layer-dock__controls">
-                    <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button">レイヤー削除</button>
+                    <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button" aria-label="レイヤー削除"><img src="assets/icons/action-delete.svg" alt="" width="20" height="20" /><span class="sr-only">レイヤー削除</span></button>
                     <button
                       id="deleteFrame"
                       class="layer-dock__control layer-dock__control--danger"
                       type="button"
                       title="現在のフレームを削除"
+                      aria-label="フレーム削除"
                     >
-                      フレーム削除
+                      <img src="assets/icons/action-delete.svg" alt="" width="20" height="20" />
+                      <span class="sr-only">フレーム削除</span>
                     </button>
                     <button
                       id="togglePlayback"
@@ -249,7 +254,10 @@
                   aria-label="キャンバス設定を展開"
                   aria-expanded="false"
                 >
-                  <span class="mini-dock__status-text" id="canvasDockStatus">32×32</span>
+                  <span class="mini-dock__status-icon">
+                    <img src="assets/icons/menu-canvas.png" alt="キャンバス設定" width="22" height="22" />
+                  </span>
+                  <span class="sr-only" id="canvasDockStatus">32×32</span>
                 </button>
                 <div class="mini-dock__drag" id="canvasDockDrag" aria-hidden="true" title="ドラッグで移動">
                   <span class="mini-dock__drag-line"></span>
@@ -257,23 +265,83 @@
               </div>
               <div class="mini-dock__body">
                 <div class="mini-dock__form" aria-label="キャンバス設定">
-                  <label class="mini-field">
-                    <span>ドットサイズ</span>
-                    <input id="pixelSize" type="number" value="1" min="1" max="32" step="1" />
-                  </label>
-                  <label class="mini-field">
-                    <span>横幅</span>
-                    <input id="canvasWidth" type="number" value="32" min="8" max="512" />
-                  </label>
-                  <label class="mini-field">
-                    <span>縦幅</span>
-                    <input id="canvasHeight" type="number" value="32" min="8" max="512" />
-                  </label>
-                  <div class="mini-field mini-field--inline">
-                    <span>メモリ使用量</span>
-                    <span id="memoryUsage" class="mini-value">--</span>
+                  <div class="mini-tabs" role="tablist" aria-label="キャンバス設定項目">
+                    <button
+                      class="mini-tabs__tab mini-tabs__tab--active"
+                      type="button"
+                      role="tab"
+                      id="canvasTabSizeToggle"
+                      aria-selected="true"
+                      aria-controls="canvasTabSize"
+                      data-canvas-tab="canvasTabSize"
+                    >
+                      サイズ
+                    </button>
+                    <button
+                      class="mini-tabs__tab"
+                      type="button"
+                      role="tab"
+                      id="canvasTabColorToggle"
+                      aria-selected="false"
+                      aria-controls="canvasTabColor"
+                      data-canvas-tab="canvasTabColor"
+                      tabindex="-1"
+                    >
+                      カラー
+                    </button>
                   </div>
-                  <button id="resizeCanvas" class="mini-dock__apply" type="button">サイズ反映</button>
+                  <div
+                    class="mini-tab-panel mini-tab-panel--active"
+                    id="canvasTabSize"
+                    role="tabpanel"
+                    aria-labelledby="canvasTabSizeToggle"
+                  >
+                    <label class="mini-field">
+                      <span>ドットサイズ</span>
+                      <input id="pixelSize" type="number" value="2" min="1" max="32" step="1" />
+                    </label>
+                    <label class="mini-field">
+                      <span>横幅</span>
+                      <input id="canvasWidth" type="number" value="32" min="8" max="512" />
+                    </label>
+                    <label class="mini-field">
+                      <span>縦幅</span>
+                      <input id="canvasHeight" type="number" value="32" min="8" max="512" />
+                    </label>
+                    <div class="mini-field mini-field--inline">
+                      <span>メモリ使用量</span>
+                      <span id="memoryUsage" class="mini-value">--</span>
+                    </div>
+                    <button id="resizeCanvas" class="mini-dock__apply" type="button">サイズ反映</button>
+                  </div>
+                  <div
+                    class="mini-tab-panel"
+                    id="canvasTabColor"
+                    role="tabpanel"
+                    aria-labelledby="canvasTabColorToggle"
+                    hidden
+                  >
+                    <fieldset class="mini-fieldset">
+                      <legend>カラーモード</legend>
+                      <div class="mini-radio-list" role="radiogroup" aria-label="カラーモード">
+                        <label class="mini-radio">
+                          <input id="colorModeRgb" type="radio" name="colorMode" value="rgb" checked />
+                          <span class="mini-radio__label">RGB</span>
+                          <span class="mini-radio__note">標準的なフルカラー表示</span>
+                        </label>
+                        <label class="mini-radio">
+                          <input id="colorModeIndexed" type="radio" name="colorMode" value="indexed" />
+                          <span class="mini-radio__label">インデックス</span>
+                          <span class="mini-radio__note">パレット参照で色数を制限</span>
+                        </label>
+                        <label class="mini-radio">
+                          <input id="colorModeCmyk" type="radio" name="colorMode" value="cmyk" />
+                          <span class="mini-radio__label">CMYK</span>
+                          <span class="mini-radio__note">印刷向けのカラーモード</span>
+                        </label>
+                      </div>
+                    </fieldset>
+                  </div>
                 </div>
               </div>
             </div>
@@ -286,10 +354,7 @@
               aria-label="プレビュー表示"
               aria-pressed="true"
             >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M3 12C5.5 7.5 9 5 12 5s6.5 2.5 9 7c-2.5 4.5-6 7-9 7s-6.5-2.5-9-7Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.6" />
-              </svg>
+              <img src="assets/icons/action-preview.svg" alt="" width="28" height="28" />
               <span class="sr-only">プレビュー表示</span>
             </button>
             <button
@@ -299,10 +364,7 @@
               aria-label="元に戻す"
               disabled
             >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M9 5L4 10L9 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M4 10H14C16.7614 10 19 12.2386 19 15C19 17.7614 16.7614 20 14 20H9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              </svg>
+              <img src="assets/icons/action-undo.svg" alt="" width="28" height="28" />
               <span class="sr-only">元に戻す</span>
             </button>
             <button
@@ -312,10 +374,7 @@
               aria-label="やり直す"
               disabled
             >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M15 5L20 10L15 15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M20 10H10C7.23858 10 5 12.2386 5 15C5 17.7614 7.23858 20 10 20H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              </svg>
+              <img src="assets/icons/action-redo.svg" alt="" width="28" height="28" />
               <span class="sr-only">やり直す</span>
             </button>
             <button
@@ -326,20 +385,11 @@
               aria-expanded="false"
               aria-label="PNG書き出し"
             >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M12 3V15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M7 10L12 15L17 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M5 19H19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              </svg>
+              <img src="assets/icons/action-export.svg" alt="" width="28" height="28" />
               <span class="sr-only">PNG書き出し</span>
             </button>
             <button id="clearCanvas" class="dock-icon-button dock-icon-button--danger" type="button" aria-label="全消去">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M6 7H18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                <path d="M9 7V5.5C9 4.67157 9.67157 4 10.5 4H13.5C14.3284 4 15 4.67157 15 5.5V7" stroke="currentColor" stroke-width="1.6" />
-                <path d="M8.5 11L15.5 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                <path d="M15.5 11L8.5 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-              </svg>
+              <img src="assets/icons/action-delete.svg" alt="" width="28" height="28" />
               <span class="sr-only">全消去</span>
             </button>
           </div>
