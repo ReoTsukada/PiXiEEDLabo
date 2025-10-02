@@ -4,432 +4,306 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PiXiEEDraw</title>
+    <meta name="theme-color" content="#1f1f1f" />
+    <link rel="manifest" href="manifest.webmanifest" />
     <link rel="stylesheet" href="assets/css/style.css" />
   </head>
   <body>
-    <div class="app-stage">
-      <div class="canvas-wrapper">
-        <div class="canvas-stage" id="canvasStage">
-          <canvas id="pixelCanvas" width="32" height="32"></canvas>
+    <div class="app" id="appRoot">
+      <div class="layout" id="appLayout">
+        <aside class="rail rail--left" id="leftRail" data-collapsed="false" aria-label="ツールとカラー設定">
+          <div class="rail-tabs" id="leftRailTabs" role="tablist" aria-label="左パネル切替">
+            <button type="button" class="rail-tab is-active" data-left-tab="tools" role="tab" aria-selected="true" aria-controls="panelTools">ツール</button>
+            <button type="button" class="rail-tab" data-left-tab="color" role="tab" aria-selected="false" aria-controls="panelColor" tabindex="-1">カラー</button>
+          </div>
+          <div class="rail-tabpanes" id="leftRailPanes"></div>
+        </aside>
+        <main class="stage" id="stage" aria-label="ドットキャンバス">
+          <div class="stage__canvas" id="canvasViewport">
+            <div class="canvas-stack" id="canvasStack" aria-live="off">
+              <canvas id="drawingCanvas" width="128" height="128" aria-label="描画キャンバス"></canvas>
+              <canvas id="overlayCanvas" width="128" height="128" aria-hidden="true"></canvas>
+            </div>
+            <div class="canvas-controls">
+              <button type="button" class="chip" id="undoAction" aria-label="元に戻す" disabled>↺</button>
+              <button type="button" class="chip" id="redoAction" aria-label="やり直す" disabled>↻</button>
+              <button type="button" class="chip" id="toggleGrid" aria-pressed="true">グリッド</button>
+              <button type="button" class="chip" id="toggleMajorGrid" aria-pressed="false">メジャー</button>
+              <button type="button" class="chip" id="toggleBackgroundMode" aria-pressed="false">背景</button>
+              <div class="zoom-control" role="group" aria-label="ズーム">
+                <button type="button" class="chip" id="zoomOut">−</button>
+                <span id="zoomLevel">100%</span>
+                <button type="button" class="chip" id="zoomIn">＋</button>
+              </div>
+            </div>
+            <button type="button" class="rail-toggle rail-toggle--left" id="openLeftRail" aria-label="左パネルを表示">⟨</button>
+            <button type="button" class="rail-toggle rail-toggle--right" id="openRightRail" aria-label="右パネルを表示">⟩</button>
+          </div>
+        </main>
+        <aside class="rail rail--right" id="rightRail" data-collapsed="false" aria-label="フレーム、レイヤー、設定">
+          <div class="rail-tabs" id="rightRailTabs" role="tablist" aria-label="右パネル切り替え">
+            <button type="button" class="rail-tab is-active" data-right-tab="frames" role="tab" aria-selected="true" aria-controls="panelFrames">レイヤー</button>
+            <button type="button" class="rail-tab" data-right-tab="settings" role="tab" aria-selected="false" aria-controls="panelSettings" tabindex="-1">設定</button>
+          </div>
+          <div class="rail-tabpanes" id="rightRailPanes"></div>
+        </aside>
+      </div>
+
+      <div class="mobile-drawer" id="mobileDrawer" hidden>
+        <div class="mobile-tabs" role="tablist" aria-label="モバイル操作パネル">
+          <button type="button" class="mobile-tab is-active" id="mobileTabTools" data-mobile-tab="tools" role="tab" aria-controls="mobilePanelTools" aria-selected="true">ツール</button>
+          <button type="button" class="mobile-tab" id="mobileTabColor" data-mobile-tab="color" role="tab" aria-controls="mobilePanelColor" aria-selected="false" tabindex="-1">カラー</button>
+          <button type="button" class="mobile-tab" id="mobileTabFrames" data-mobile-tab="frames" role="tab" aria-controls="mobilePanelFrames" aria-selected="false" tabindex="-1">フレーム/レイヤー</button>
+          <button type="button" class="mobile-tab" id="mobileTabSettings" data-mobile-tab="settings" role="tab" aria-controls="mobilePanelSettings" aria-selected="false" tabindex="-1">設定</button>
         </div>
-        <div id="previewWindow" class="preview-window" aria-label="プレビュー">
-          <div id="previewHandle" class="preview-window__handle" role="button" tabindex="0" aria-label="プレビューを移動">PREVIEW</div>
-          <canvas id="previewCanvas" width="32" height="32" aria-hidden="true"></canvas>
+        <div class="mobile-panels" id="mobilePanels">
+          <div class="mobile-panel is-active" id="mobilePanelTools" role="tabpanel" aria-labelledby="mobileTabTools"></div>
+          <div class="mobile-panel" id="mobilePanelColor" role="tabpanel" aria-labelledby="mobileTabColor" hidden></div>
+          <div class="mobile-panel" id="mobilePanelFrames" role="tabpanel" aria-labelledby="mobileTabFrames" hidden></div>
+          <div class="mobile-panel" id="mobilePanelSettings" role="tabpanel" aria-labelledby="mobileTabSettings" hidden></div>
         </div>
       </div>
 
-      <div
-        class="floating-dock"
-        id="floatingDock"
-        role="toolbar"
-        aria-label="ツール操作"
-        data-collapsed="true"
-        style="top: 24px; left: 24px"
-      >
-        <div class="floating-dock__header">
-          <div class="floating-dock__bar">
-            <button
-              class="floating-dock__toggle"
-              type="button"
-              id="dockToggle"
-              aria-label="ドックを展開"
-              aria-expanded="false"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M7 8.5L12 13.5L17 8.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <span class="sr-only">ドックの表示を切り替え</span>
+      <section class="panel-section" id="panelTools" data-section="tools">
+        <header class="panel-section__header">
+          <h2>ツール</h2>
+          <button type="button" class="panel-collapse" data-action="collapseLeft" aria-label="左パネルを隠す"></button>
+        </header>
+        <div class="panel-section__body">
+          <div class="tool-group-tabs" role="tablist" aria-label="ツールカテゴリ">
+            <button type="button" class="tool-group-button is-active" data-tool-group="selection" role="tab" aria-selected="true">範囲選択</button>
+            <button type="button" class="tool-group-button" data-tool-group="pen" role="tab" aria-selected="false">ペン</button>
+            <button type="button" class="tool-group-button" data-tool-group="eraser" role="tab" aria-selected="false">消しゴム</button>
+            <button type="button" class="tool-group-button" data-tool-group="shape" role="tab" aria-selected="false">図形</button>
+            <button type="button" class="tool-group-button" data-tool-group="fill" role="tab" aria-selected="false">塗りつぶし</button>
+          </div>
+          <div class="tool-grid" id="toolGrid" role="toolbar" aria-label="描画ツール">
+            <button type="button" class="tool-button is-active" data-tool="pen" data-tool-group="pen" aria-pressed="true">
+              <img src="assets/icons/tool-pen-new.svg" alt="ペン" width="32" height="32" />
+              <span>ペン</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="eyedropper" data-tool-group="pen" aria-pressed="false">
+              <img src="assets/icons/tool-eyedropper.png" alt="スポイト" width="32" height="32" />
+              <span>スポイト</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="eraser" data-tool-group="eraser" aria-pressed="false">
+              <img src="assets/icons/tool-eraser.png" alt="消しゴム" width="32" height="32" />
+              <span>消しゴム</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="line" data-tool-group="shape" aria-pressed="false">
+              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><line x1="4" y1="28" x2="28" y2="4" stroke="currentColor" stroke-width="4" stroke-linecap="round" /></svg>
+              <span>直線</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="curve" data-tool-group="shape" aria-pressed="false">
+              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><path d="M4 24c6-10 10-16 24-16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" /></svg>
+              <span>曲線</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="rect" data-tool-group="shape" aria-pressed="false">
+              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><rect x="6" y="6" width="20" height="20" fill="none" stroke="currentColor" stroke-width="4" rx="2" /></svg>
+              <span>四角</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="rectFill" data-tool-group="shape" aria-pressed="false">
+              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><rect x="6" y="6" width="20" height="20" fill="currentColor" rx="2" /></svg>
+              <span>塗り四角</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="ellipse" data-tool-group="shape" aria-pressed="false">
+              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="4" /></svg>
+              <span>丸</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="ellipseFill" data-tool-group="shape" aria-pressed="false">
+              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="10" fill="currentColor" /></svg>
+              <span>塗り丸</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="fill" data-tool-group="fill" aria-pressed="false">
+              <img src="assets/icons/tool-fill.png" alt="塗りつぶし" width="32" height="32" />
+              <span>塗りつぶし</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="selectRect" data-tool-group="selection" aria-pressed="false">
+              <img src="assets/icons/tool-select-rect.svg" alt="矩形選択" width="32" height="32" />
+              <span>矩形選択</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="selectLasso" data-tool-group="selection" aria-pressed="false">
+              <img src="assets/icons/tool-select-lasso.svg" alt="投げ縄" width="32" height="32" />
+              <span>投げ縄</span>
+            </button>
+            <button type="button" class="tool-button" data-tool="selectSame" data-tool-group="selection" aria-pressed="false">
+              <img src="assets/icons/tool-select-magic.svg" alt="同色選択" width="32" height="32" />
+              <span>同色</span>
             </button>
           </div>
-          <div class="floating-dock__grip">
-            <button
-              class="floating-dock__handle"
-              type="button"
-              id="dockHandle"
-              aria-label="ツールボタンを移動"
-            >
-              <span class="mini-dock__drag-line" aria-hidden="true"></span>
-            </button>
+          <div class="field-group">
+            <label class="field">
+              <span>ブラシサイズ</span>
+              <input type="range" id="brushSize" min="1" max="12" value="1" />
+              <output id="brushSizeValue" for="brushSize">1px</output>
+            </label>
+            <label class="field">
+              <span>不透明度</span>
+              <input type="range" id="brushOpacity" min="0" max="100" value="100" />
+              <output id="brushOpacityValue" for="brushOpacity">100%</output>
+            </label>
           </div>
-          <div class="floating-dock__help-inline"><button class="floating-dock__help" type="button" aria-label="ドックの使い方" data-help-id="dockMenu">?</button></div>
         </div>
-        <div class="floating-dock__content">
-          <div class="floating-dock__group floating-dock__group--mini" id="dockMenu">
-            <div class="mini-dock mini-dock--tools" id="toolDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__header">
-                <button
-                  class="mini-dock__status mini-dock__status-button"
-                  type="button"
-                  data-dock-state="toolDock"
-                  aria-label="ツールボックスを展開"
-                  aria-expanded="false"
-                >
-                  <span class="mini-dock__status-icon">
-                    <img id="toolDockStatus" src="assets/icons/tool-pencil.png" alt="選択中のツール" width="22" height="22" />
-                  </span>
-                </button>
-                <div class="mini-dock__drag" id="toolDockDrag" aria-hidden="true" title="ドラッグで移動">
-                  <span class="mini-dock__drag-line"></span>
-                </div>
-                <div class="mini-dock__help-inline"><button class="mini-dock__help" type="button" aria-label="ツールボックスの使い方" data-help-id="toolDock">?</button></div>
+      </section>
+
+      <section class="panel-section" id="panelColor" data-section="color">
+        <header class="panel-section__header">
+          <h2>カラー</h2>
+          <button type="button" class="panel-collapse" data-action="collapseLeft" aria-label="左パネルを隠す"></button>
+        </header>
+        <div class="panel-section__body">
+          <fieldset class="field field--inline" role="radiogroup" aria-label="カラーモード">
+            <legend>モード</legend>
+            <label><input type="radio" name="colorMode" value="index" checked />インデックス</label>
+            <label><input type="radio" name="colorMode" value="rgb" />RGB</label>
+          </fieldset>
+          <div class="color-mode color-mode--index" id="colorModeIndex">
+            <div class="palette-header">
+              <span>パレット</span>
+              <button type="button" class="chip" id="addPaletteColor">＋ 追加</button>
+            </div>
+            <div class="palette-grid" id="paletteList" role="listbox" aria-label="カラーパレット"></div>
+            <div class="palette-editor" id="paletteEditor">
+              <label class="field field--compact">
+                <span>インデックス</span>
+                <input type="number" id="paletteIndex" min="0" step="1" />
+              </label>
+              <label class="field field--compact">
+                <span>色</span>
+                <input type="color" id="paletteColor" />
+              </label>
+              <div class="palette-rgb-fields">
+                <label class="field field--tiny">
+                  <span>R</span>
+                  <input type="number" id="paletteR" min="0" max="255" />
+                </label>
+                <label class="field field--tiny">
+                  <span>G</span>
+                  <input type="number" id="paletteG" min="0" max="255" />
+                </label>
+                <label class="field field--tiny">
+                  <span>B</span>
+                  <input type="number" id="paletteB" min="0" max="255" />
+                </label>
+                <label class="field field--tiny">
+                  <span>A</span>
+                  <input type="number" id="paletteA" min="0" max="255" />
+                </label>
               </div>
-              <div class="mini-dock__body">
-                <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="描画ツール">
-                  <button class="mini-button tool-button tool-button--active" type="button" data-tool="pencil" data-icon="assets/icons/tool-pencil.png" aria-label="鉛筆">
-                    <img src="assets/icons/tool-pencil.png" alt="鉛筆" width="32" height="32" />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-tool="pen" data-icon="assets/icons/tool-pen-new.svg" aria-label="ペン">
-                    <img src="assets/icons/tool-pen-new.svg" alt="ペン" width="32" height="32" />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-tool="eraser" data-icon="assets/icons/tool-eraser.png" aria-label="消しゴム">
-                    <img src="assets/icons/tool-eraser.png" alt="消しゴム" width="32" height="32" />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-tool="fill" data-icon="assets/icons/tool-fill.png" aria-label="塗りつぶし">
-                    <img src="assets/icons/tool-fill.png" alt="塗りつぶし" width="32" height="32" />
-                  </button>
-                  <button
-                    class="mini-button tool-button"
-                    type="button"
-                    data-toggle="selectionTools"
-                    data-default-tool="selectRect"
-                    data-default-icon="assets/icons/tool-select-rect.svg"
-                    data-default-label="範囲選択ツール"
-                    aria-label="範囲選択ツール"
-                    aria-haspopup="true"
-                    aria-expanded="false"
-                  >
-                    <img
-                      id="selectionToolToggleIcon"
-                      src="assets/icons/tool-select-rect.svg"
-                      alt="範囲選択ツール"
-                      width="32"
-                      height="32"
-                    />
-                  </button>
-                  <button
-                    class="mini-button tool-button"
-                    type="button"
-                    data-toggle="shapeTools"
-                    data-default-tool="shapeLine"
-                    data-default-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nMycgeT0nMTEnIHdpZHRoPScxMCcgaGVpZ2h0PScxMCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHJ4PScxJy8+PGNpcmNsZSBjeD0nMTUuNScgY3k9JzguNScgcj0nNC41JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicvPjwvc3ZnPg=="
-                    data-default-label="図形ツール"
-                    aria-label="図形ツール"
-                    aria-haspopup="true"
-                    aria-expanded="false"
-                  >
-                    <img
-                      id="shapeToolToggleIcon"
-                      src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nMycgeT0nMTEnIHdpZHRoPScxMCcgaGVpZ2h0PScxMCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHJ4PScxJy8+PGNpcmNsZSBjeD0nMTUuNScgY3k9JzguNScgcj0nNC41JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicvPjwvc3ZnPg=="
-                      alt="図形ツール"
-                      width="32"
-                      height="32"
-                    />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-tool="pan" data-icon="assets/icons/tool-pan.svg" aria-label="キャンバス移動">
-                    <img src="assets/icons/tool-pan.svg" alt="キャンバス移動" width="32" height="32" />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-tool="eyedropper" data-icon="assets/icons/tool-eyedropper.png" aria-label="スポイト">
-                    <img src="assets/icons/tool-eyedropper.png" alt="スポイト" width="32" height="32" />
-                  </button>
-                  <button class="mini-button tool-button" type="button" data-toggle="virtualCursor" data-icon="assets/icons/tool-cursor.png" aria-label="仮想カーソル">
-                    <img src="assets/icons/tool-cursor.png" alt="仮想カーソル" width="32" height="32" />
-                  </button>
+            </div>
+          </div>
+          <div class="color-mode color-mode--rgb" id="colorModeRgb" hidden>
+            <label class="field">
+              <span>色</span>
+              <input type="color" id="rgbColor" value="#58c4ff" />
+            </label>
+            <div class="palette-rgb-fields">
+              <label class="field field--tiny">
+                <span>R</span>
+                <input type="number" id="rgbR" min="0" max="255" value="88" />
+              </label>
+              <label class="field field--tiny">
+                <span>G</span>
+                <input type="number" id="rgbG" min="0" max="255" value="196" />
+              </label>
+              <label class="field field--tiny">
+                <span>B</span>
+                <input type="number" id="rgbB" min="0" max="255" value="255" />
+              </label>
+              <label class="field field--tiny">
+                <span>A</span>
+                <input type="number" id="rgbA" min="0" max="255" value="255" />
+              </label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel-section" id="panelFrames" data-section="frames">
+        <header class="panel-section__header">
+          <h2>フレーム &amp; レイヤー</h2>
+          <button type="button" class="panel-collapse" data-action="collapseRight" aria-label="右パネルを隠す"></button>
+        </header>
+        <div class="panel-section__body">
+          <div class="subtabs" role="tablist" aria-label="フレームとレイヤーの切替">
+            <button type="button" class="subtab is-active" data-subtab="layers" role="tab" aria-controls="layersPane" aria-selected="true">レイヤー</button>
+            <button type="button" class="subtab" data-subtab="frames" role="tab" aria-controls="framesPane" aria-selected="false" tabindex="-1">フレーム</button>
+          </div>
+          <div class="subtab-panels">
+            <div class="subtab-panel is-active" id="layersPane" role="tabpanel" aria-labelledby="layersTab">
+              <div class="list-header">
+                <span>レイヤー</span>
+                <div class="list-actions">
+                  <button type="button" class="chip" id="addLayer">＋</button>
+                  <button type="button" class="chip" id="removeLayer">－</button>
                 </div>
-                <div class="mini-dock__selection-panel" id="shapeToolPanel" hidden aria-hidden="true">
-                  <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="図形ツール">
-                    <button class="mini-button tool-button" type="button" data-tool="shapeLine" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMjBMMjAgNCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Rya2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+" aria-label="直線">
-                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMjBMMjAgNCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Rya2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+" alt="直線" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="shapeCurve" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMTYgUTEyIDQgMjAgMTYnIGZpbGw9J25vbmUnIHN0cm9rZT0nI2ZmZmZmZicgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=" aria-label="曲線">
-                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHBhdGggZD0nTTQgMTYgUTEyIDQgMjAgMTYnIGZpbGw9J25vbmUnIHN0cm9rZT0nI2ZmZmZmZicgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48L3N2Zz4=" alt="曲線" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="shapeCircle" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInLz48L3N2Zz4=" aria-label="円">
-                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nbm9uZScgc3Ryb2tlPScjZmZmZmZmJyBzdHJva2Utd2lkdGg9JzInLz48L3N2Zz4=" alt="円" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="shapeCircleFill" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nI2ZmZmZmZicvPjwvc3ZnPg==" aria-label="円（塗りつぶし）">
-                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nOCcgZmlsbD0nI2ZmZmZmZicvPjwvc3ZnPg==" alt="円（塗りつぶし）" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="shapeRect" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicgcng9JzEnLz48L3N2Zz4=" aria-label="四角">
-                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPSdub25lJyBzdHJva2U9JyNmZmZmZmYnIHN0cm9rZS13aWR0aD0nMicgcng9JzEnLz48L3N2Zz4=" alt="四角" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="shapeRectFill" data-icon="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPScjZmZmZmZmJyByeD0nMScvPjwvc3ZnPg==" aria-label="四角（塗りつぶし）">
-                      <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PHJlY3QgeD0nNCcgeT0nNCcgd2lkdGg9JzE2JyBoZWlnaHQ9JzE2JyBmaWxsPScjZmZmZmZmJyByeD0nMScvPjwvc3ZnPg==" alt="四角（塗りつぶし）" width="32" height="32" />
-                    </button>
-                  </div>
+              </div>
+              <ul class="item-list" id="layerList" aria-label="レイヤー一覧"></ul>
+            </div>
+            <div class="subtab-panel" id="framesPane" role="tabpanel" aria-labelledby="mobileTabFrames" hidden>
+              <div class="list-header">
+                <span>フレーム</span>
+                <div class="list-actions">
+                  <button type="button" class="chip" id="addFrame">＋</button>
+                  <button type="button" class="chip" id="removeFrame">－</button>
                 </div>
-                <div class="mini-dock__selection-panel" id="selectionToolPanel" hidden aria-hidden="true">
-                  <div class="mini-dock__grid mini-dock__grid--tools" role="group" aria-label="範囲選択モード">
-                    <button class="mini-button tool-button" type="button" data-tool="selectRect" data-icon="assets/icons/tool-select-rect.svg" aria-label="四角形範囲選択">
-                      <img src="assets/icons/tool-select-rect.svg" alt="四角形範囲選択" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="selectLasso" data-icon="assets/icons/tool-select-lasso.svg" aria-label="投げ縄選択">
-                      <img src="assets/icons/tool-select-lasso.svg" alt="投げ縄選択" width="32" height="32" />
-                    </button>
-                    <button class="mini-button tool-button" type="button" data-tool="selectMagic" data-icon="assets/icons/tool-select-magic.svg" aria-label="同色選択">
-                      <img src="assets/icons/tool-select-magic.svg" alt="同色選択" width="32" height="32" />
-                    </button>
-                  </div>
-                </div>
-                <div class="mini-dock__form mini-dock__form--brush">
-                  <label class="mini-field mini-field--inline">
-                    <span>ブラシ</span>
-                    <input id="brushSize" type="range" min="1" max="8" value="1" />
-                    <span id="brushSizeDisplay" class="mini-value">1</span>
+              </div>
+              <ul class="item-list" id="frameList" aria-label="フレーム一覧"></ul>
+              <div class="field">
+                <span>再生</span>
+                <div class="timeline">
+                  <button type="button" class="chip" id="playAnimation">▶</button>
+                  <label class="field field--tiny">
+                    <span>fps</span>
+                    <input type="number" id="animationFps" min="1" max="60" value="12" />
                   </label>
                 </div>
               </div>
             </div>
-            <div class="mini-dock mini-dock--palette" id="paletteDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__header">
-                <button
-                  class="mini-dock__status mini-dock__status-button"
-                  type="button"
-                  data-dock-state="paletteDock"
-                  aria-label="カラーパレットを展開"
-                  aria-expanded="false"
-                >
-                  <span class="mini-dock__status-color" id="paletteDockStatus" style="--swatch-color: #58c4ff"></span>
-                </button>
-                <div class="mini-dock__drag" id="paletteDockDrag" aria-hidden="true" title="ドラッグで移動">
-                  <span class="mini-dock__drag-line"></span>
-                </div>
-              </div>
-              <div class="mini-dock__body">
-                <div class="mini-dock__grid mini-dock__grid--palette swatch-grid" id="palette" role="grid" aria-label="カラーパレット"></div>
-              </div>
-            </div>
-            <div class="mini-dock mini-dock--layers" id="layerDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__header">
-                <button
-                  class="mini-dock__status mini-dock__status-button"
-                  type="button"
-                  data-dock-state="layerDock"
-                  aria-label="レイヤーパネルを展開"
-                  aria-expanded="false"
-                >
-                  <span class="mini-dock__status-icon">
-                    <img src="assets/icons/menu-frame.png" alt="" width="22" height="22" />
-                  </span>
-                  <span class="sr-only" id="layerDockStatus">レイヤー1</span>
-                </button>
-                <div class="mini-dock__drag" id="layerDockDrag" aria-hidden="true" title="ドラッグで移動">
-                  <span class="mini-dock__drag-line"></span>
-                </div>
-              </div>
-              <div class="mini-dock__body">
-                <div class="layer-dock" aria-label="レイヤー操作" data-layer-dock>
-                  <div class="layer-dock__controls">
-                    <button id="deleteLayer" class="layer-dock__control layer-dock__control--danger" type="button" aria-label="レイヤー削除"><img src="assets/icons/action-delete.svg" alt="" width="20" height="20" /><span class="sr-only">レイヤー削除</span></button>
-                    <button
-                      id="deleteFrame"
-                      class="layer-dock__control layer-dock__control--danger"
-                      type="button"
-                      title="現在のフレームを削除"
-                      aria-label="フレーム削除"
-                    >
-                      <img src="assets/icons/action-delete.svg" alt="" width="20" height="20" />
-                      <span class="sr-only">フレーム削除</span>
-                    </button>
-                    <button
-                      id="togglePlayback"
-                      class="layer-dock__control layer-dock__control--compact"
-                      type="button"
-                      aria-pressed="false"
-                      title="フレームを再生"
-                    >
-                      <span aria-hidden="true">▶</span><span class="sr-only">再生</span>
-                    </button>
-                  </div>
-                  <button class="layer-dock__add-layer" type="button" data-action="addLayer" aria-label="レイヤーを追加">+レイヤー</button>
-                  <div class="layer-dock__list" id="layerList" role="listbox" aria-label="レイヤー一覧"></div>
-                </div>
-              </div>
-            </div>
-            <div class="mini-dock mini-dock--canvas" id="canvasDock" data-state="compact" data-visible="false">
-              <div class="mini-dock__header">
-                <button
-                  class="mini-dock__status mini-dock__status-button"
-                  type="button"
-                  data-dock-state="canvasDock"
-                  aria-label="キャンバス設定を展開"
-                  aria-expanded="false"
-                >
-                  <span class="mini-dock__status-icon">
-                    <img src="assets/icons/menu-canvas.png" alt="キャンバス設定" width="22" height="22" />
-                  </span>
-                  <span class="sr-only" id="canvasDockStatus">32×32</span>
-                </button>
-                <div class="mini-dock__drag" id="canvasDockDrag" aria-hidden="true" title="ドラッグで移動">
-                  <span class="mini-dock__drag-line"></span>
-                </div>
-              </div>
-              <div class="mini-dock__body">
-                <div class="mini-dock__form" aria-label="キャンバス設定">
-                  <div class="mini-tabs" role="tablist" aria-label="キャンバス設定項目">
-                    <button
-                      class="mini-tabs__tab mini-tabs__tab--active"
-                      type="button"
-                      role="tab"
-                      id="canvasTabSizeToggle"
-                      aria-selected="true"
-                      aria-controls="canvasTabSize"
-                      data-canvas-tab="canvasTabSize"
-                    >
-                      サイズ
-                    </button>
-                    <button
-                      class="mini-tabs__tab"
-                      type="button"
-                      role="tab"
-                      id="canvasTabColorToggle"
-                      aria-selected="false"
-                      aria-controls="canvasTabColor"
-                      data-canvas-tab="canvasTabColor"
-                      tabindex="-1"
-                    >
-                      カラー
-                    </button>
-                  </div>
-                  <div
-                    class="mini-tab-panel mini-tab-panel--active"
-                    id="canvasTabSize"
-                    role="tabpanel"
-                    aria-labelledby="canvasTabSizeToggle"
-                  >
-                    <label class="mini-field">
-                      <span>ドットサイズ</span>
-                      <input id="pixelSize" type="number" value="2" min="1" max="32" step="1" />
-                    </label>
-                    <label class="mini-field">
-                      <span>横幅</span>
-                      <input id="canvasWidth" type="number" value="32" min="8" max="512" />
-                    </label>
-                    <label class="mini-field">
-                      <span>縦幅</span>
-                      <input id="canvasHeight" type="number" value="32" min="8" max="512" />
-                    </label>
-                    <div class="mini-field mini-field--inline">
-                      <span>メモリ使用量</span>
-                      <span id="memoryUsage" class="mini-value">--</span>
-                    </div>
-                    <button id="resizeCanvas" class="mini-dock__apply" type="button">サイズ反映</button>
-                  </div>
-                  <div
-                    class="mini-tab-panel"
-                    id="canvasTabColor"
-                    role="tabpanel"
-                    aria-labelledby="canvasTabColorToggle"
-                    hidden
-                  >
-                    <fieldset class="mini-fieldset">
-                      <legend>カラーモード</legend>
-                      <div class="mini-radio-list" role="radiogroup" aria-label="カラーモード">
-                        <label class="mini-radio">
-                          <input id="colorModeRgb" type="radio" name="colorMode" value="rgb" checked />
-                          <span class="mini-radio__label">RGB</span>
-                          <span class="mini-radio__note">標準的なフルカラー表示</span>
-                        </label>
-                        <label class="mini-radio">
-                          <input id="colorModeIndexed" type="radio" name="colorMode" value="indexed" />
-                          <span class="mini-radio__label">インデックス</span>
-                          <span class="mini-radio__note">パレット参照で色数を制限</span>
-                        </label>
-                        <label class="mini-radio">
-                          <input id="colorModeCmyk" type="radio" name="colorMode" value="cmyk" />
-                          <span class="mini-radio__label">CMYK</span>
-                          <span class="mini-radio__note">印刷向けのカラーモード</span>
-                        </label>
-                      </div>
-                    </fieldset>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="floating-dock__group floating-dock__group--actions">
-            <button
-              id="togglePreview"
-              class="dock-icon-button"
-              type="button"
-              aria-label="プレビュー表示"
-              aria-pressed="true"
-            >
-              <img src="assets/icons/action-preview.svg" alt="" width="28" height="28" />
-              <span class="sr-only">プレビュー表示</span>
-            </button>
-            <button
-              id="undoAction"
-              class="dock-icon-button"
-              type="button"
-              aria-label="元に戻す"
-              disabled
-            >
-              <img src="assets/icons/action-undo.svg" alt="" width="28" height="28" />
-              <span class="sr-only">元に戻す</span>
-            </button>
-            <button
-              id="redoAction"
-              class="dock-icon-button"
-              type="button"
-              aria-label="やり直す"
-              disabled
-            >
-              <img src="assets/icons/action-redo.svg" alt="" width="28" height="28" />
-              <span class="sr-only">やり直す</span>
-            </button>
-            <button
-              id="exportImage"
-              class="dock-icon-button"
-              type="button"
-              data-panel-target="exportPanel"
-              aria-expanded="false"
-              aria-label="PNG書き出し"
-            >
-              <img src="assets/icons/action-export.svg" alt="" width="28" height="28" />
-              <span class="sr-only">PNG書き出し</span>
-            </button>
-            <button id="clearCanvas" class="dock-icon-button dock-icon-button--danger" type="button" aria-label="全消去">
-              <img src="assets/icons/action-delete.svg" alt="" width="28" height="28" />
-              <span class="sr-only">全消去</span>
-            </button>
           </div>
         </div>
-      </div>
+      </section>
 
-      <footer class="app-footer">
-        <small>© 2025 アルタ</small>
-      </footer>
-    </div>
-
-    <div class="panel-overlay" id="panelOverlay" hidden></div>
-
-    <div class="floating-panel" id="exportPanel" role="dialog" aria-modal="true" aria-labelledby="exportPanelTitle" hidden>
-      <div class="floating-panel__header">
-        <h2 id="exportPanelTitle">書き出し</h2>
-        <button class="floating-panel__close" type="button" data-panel-close aria-label="閉じる">×</button>
-      </div>
-      <div class="floating-panel__body">
-        <div class="panel-section panel-section--floating">
-          <h3>出力サイズ</h3>
+      <section class="panel-section" id="panelSettings" data-section="settings">
+        <header class="panel-section__header">
+          <h2>設定</h2>
+          <button type="button" class="panel-collapse" data-action="collapseRight" aria-label="右パネルを隠す"></button>
+        </header>
+        <div class="panel-section__body">
           <label class="field">
-            <span>解像度</span>
-            <select id="exportSize" class="input-select"></select>
+            <span>キャンバスサイズ</span>
+            <div class="field field--inline">
+              <label class="field field--tiny">
+                <span>横</span>
+                <input type="number" id="canvasWidth" min="1" max="256" value="128" />
+              </label>
+              <label class="field field--tiny">
+                <span>縦</span>
+                <input type="number" id="canvasHeight" min="1" max="256" value="128" />
+              </label>
+            </div>
           </label>
-          <small class="field-help" id="exportHint">最大解像度は 1024px までです。</small>
+          <label class="field">
+            <span>ズーム</span>
+            <input type="range" id="zoomSlider" min="1" max="40" value="8" />
+          </label>
+          <div class="field field--inline">
+            <span>背景</span>
+            <label><input type="checkbox" id="toggleChecker" checked /> 16px グレーチェック</label>
+          </div>
+          <div class="field field--inline">
+            <span>ガイド</span>
+            <label><input type="checkbox" id="togglePixelPreview" checked /> 1px ガイド</label>
+          </div>
+          <button type="button" class="button" id="openDocument">ファイルを開く</button>
+          <button type="button" class="button" id="clearCanvas">キャンバスをクリア</button>
+          <button type="button" class="button" id="enableAutosave">ローカルに自動保存</button>
+          <p class="help-text" id="autosaveStatus" aria-live="polite"></p>
         </div>
-        <button id="confirmExport" class="button button--block" type="button">PNG を保存</button>
-        <button
-          id="confirmExportGif"
-          class="button button--block button--secondary"
-          type="button"
-          hidden
-        >
-          GIF を保存
-        </button>
-        <small class="field-help" id="exportGifHint" hidden>複数フレームがある場合に GIF を書き出せます。</small>
-      </div>
+      </section>
     </div>
 
     <script src="assets/js/app.js" defer></script>
+    <script src="assets/js/pwa.js" defer></script>
   </body>
 </html>
