@@ -1,0 +1,23 @@
+{
+  "name": "PiXiEEDraw",
+  "short_name": "PiXiEEDraw",
+  "description": "ブラウザで動作するピクセルエディタ",
+  "lang": "ja",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#1f1f1f",
+  "theme_color": "#1f1f1f",
+  "icons": [
+    {
+      "src": "assets/icons/menu-canvas.png",
+      "sizes": "42x42",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icons/tool-cursor.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    }
+  ]
+}
