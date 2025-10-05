@@ -58,11 +58,14 @@
       paletteList: document.getElementById('paletteList'),
       addPaletteColor: document.getElementById('addPaletteColor'),
       paletteIndex: document.getElementById('paletteIndex'),
-      paletteColor: document.getElementById('paletteColor'),
-      paletteR: document.getElementById('paletteR'),
-      paletteG: document.getElementById('paletteG'),
-      paletteB: document.getElementById('paletteB'),
-      paletteA: document.getElementById('paletteA'),
+      paletteHue: document.getElementById('paletteHue'),
+      paletteSaturation: document.getElementById('paletteSaturation'),
+      paletteValue: document.getElementById('paletteValue'),
+      paletteAlphaSlider: document.getElementById('paletteAlphaSlider'),
+      paletteAlphaValue: document.getElementById('paletteAlphaValue'),
+      paletteWheel: /** @type {HTMLCanvasElement|null} */ (document.getElementById('paletteColorWheel')),
+      paletteWheelCursor: document.getElementById('paletteWheelCursor'),
+      palettePreview: document.getElementById('palettePreview'),
       rgbColor: document.getElementById('rgbColor'),
       rgbR: document.getElementById('rgbR'),
       rgbG: document.getElementById('rgbG'),
@@ -192,6 +195,11 @@
   let playbackHandle = null;
   let lastFrameTime = 0;
   let curveBuilder = null;
+  let paletteWheelCtx = null;
+  const paletteEditorState = {
+    hsv: { h: 0, s: 0, v: 1, a: 255 },
+    wheelPointer: { active: false, pointerId: null, upHandler: null },
+  };
 
   function createInitialState(options = {}) {
     const {
@@ -2467,40 +2475,42 @@
       commitHistory();
     });
 
-    [dom.controls.paletteR, dom.controls.paletteG, dom.controls.paletteB, dom.controls.paletteA].forEach((input, idx) => {
-      input?.addEventListener('input', () => {
-        const active = state.palette[state.activePaletteIndex];
-        if (!active) return;
-        beginHistory('paletteColor');
-        const value = clamp(Number(input.value), 0, 255);
-        if (idx === 0) active.r = value;
-        if (idx === 1) active.g = value;
-        if (idx === 2) active.b = value;
-        if (idx === 3) active.a = value;
-        syncPaletteInputs();
-        applyPaletteChange();
-        commitHistory();
-      });
-    });
-
-    dom.controls.paletteColor?.addEventListener('input', () => {
-      const active = state.palette[state.activePaletteIndex];
-      if (!active) return;
-      const rgba = hexToRgba(dom.controls.paletteColor.value);
-      if (!rgba) return;
-      beginHistory('paletteColor');
-      Object.assign(active, rgba);
-      dom.controls.paletteA.value = String(active.a);
-      syncPaletteInputs();
-      applyPaletteChange();
-      commitHistory();
-    });
-
     dom.controls.paletteIndex?.addEventListener('change', () => {
       const target = clamp(Number(dom.controls.paletteIndex.value), 0, state.palette.length - 1);
       if (Number.isNaN(target)) return;
       reorderPalette(state.activePaletteIndex, target);
     });
+
+    dom.controls.paletteHue?.addEventListener('input', () => {
+      handlePaletteSliderInput({ source: 'hue' });
+    });
+
+    if (dom.controls.paletteHue) {
+      dom.controls.paletteHue.style.background = 'linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)';
+    }
+
+    dom.controls.paletteSaturation?.addEventListener('input', () => {
+      handlePaletteSliderInput({ source: 'saturation' });
+    });
+
+    dom.controls.paletteValue?.addEventListener('input', () => {
+      handlePaletteSliderInput({ source: 'value' });
+    });
+
+    dom.controls.paletteAlphaSlider?.addEventListener('input', () => {
+      handlePaletteSliderInput({ source: 'alpha' });
+    });
+
+    const wheel = dom.controls.paletteWheel;
+    if (wheel && typeof wheel.getContext === 'function') {
+      paletteWheelCtx = wheel.getContext('2d', { willReadFrequently: true }) || null;
+      wheel.addEventListener('pointerdown', handlePaletteWheelPointerDown);
+      wheel.addEventListener('pointercancel', handlePaletteWheelPointerUp);
+      window.addEventListener('resize', debounce(() => {
+        drawPaletteWheel();
+        updatePaletteWheelCursor();
+      }, 160));
+    }
 
     [dom.controls.rgbR, dom.controls.rgbG, dom.controls.rgbB, dom.controls.rgbA].forEach((input, idx) => {
       input?.addEventListener('input', () => {
@@ -2552,11 +2562,29 @@
     const color = state.palette[state.activePaletteIndex];
     if (!color) return;
     dom.controls.paletteIndex.value = String(state.activePaletteIndex);
-    dom.controls.paletteColor.value = rgbaToHex(color);
-    dom.controls.paletteR.value = String(color.r);
-    dom.controls.paletteG.value = String(color.g);
-    dom.controls.paletteB.value = String(color.b);
-    dom.controls.paletteA.value = String(color.a);
+    const hsv = rgbaToHsv(color);
+    paletteEditorState.hsv = {
+      h: hsv.h,
+      s: hsv.s,
+      v: hsv.v,
+      a: color.a,
+    };
+    if (dom.controls.paletteHue) {
+      dom.controls.paletteHue.value = String(Math.round(hsv.h));
+    }
+    if (dom.controls.paletteSaturation) {
+      dom.controls.paletteSaturation.value = String(Math.round(hsv.s * 100));
+    }
+    if (dom.controls.paletteValue) {
+      dom.controls.paletteValue.value = String(Math.round(hsv.v * 100));
+    }
+    if (dom.controls.paletteAlphaSlider) {
+      dom.controls.paletteAlphaSlider.value = String(color.a);
+    }
+    updatePaletteAlphaOutput();
+    updatePalettePreview();
+    drawPaletteWheel();
+    updatePaletteWheelCursor();
   }
 
   function renderPalette() {
@@ -2617,6 +2645,204 @@
     requestRender();
     requestOverlayRender();
     scheduleSessionPersist();
+  }
+
+  function handlePaletteSliderInput({ source = 'unknown' } = {}) {
+    const active = state.palette[state.activePaletteIndex];
+    if (!active) return;
+    const hueValue = clamp(Number(dom.controls.paletteHue?.value ?? paletteEditorState.hsv.h), 0, 360);
+    const saturationValue = clamp(Number(dom.controls.paletteSaturation?.value ?? paletteEditorState.hsv.s * 100), 0, 100) / 100;
+    const valueValue = clamp(Number(dom.controls.paletteValue?.value ?? paletteEditorState.hsv.v * 100), 0, 100) / 100;
+    const alphaValue = clamp(Number(dom.controls.paletteAlphaSlider?.value ?? paletteEditorState.hsv.a), 0, 255);
+    paletteEditorState.hsv.h = hueValue;
+    paletteEditorState.hsv.s = saturationValue;
+    paletteEditorState.hsv.v = valueValue;
+    paletteEditorState.hsv.a = alphaValue;
+    if (source === 'value') {
+      drawPaletteWheel();
+    }
+    updatePaletteWheelCursor();
+    updatePalettePreview();
+    updatePaletteAlphaOutput();
+    writePaletteColorFromHsv();
+  }
+
+  function updatePaletteAlphaOutput() {
+    if (dom.controls.paletteAlphaValue) {
+      dom.controls.paletteAlphaValue.textContent = String(Math.round(paletteEditorState.hsv.a));
+    }
+    const alphaSlider = dom.controls.paletteAlphaSlider;
+    if (alphaSlider) {
+      const opaqueColor = hsvToRgba(paletteEditorState.hsv.h, paletteEditorState.hsv.s, paletteEditorState.hsv.v);
+      alphaSlider.style.background = `linear-gradient(90deg, rgba(${opaqueColor.r}, ${opaqueColor.g}, ${opaqueColor.b}, 0) 0%, rgba(${opaqueColor.r}, ${opaqueColor.g}, ${opaqueColor.b}, 1) 100%)`;
+    }
+  }
+
+  function updatePalettePreview() {
+    const preview = dom.controls.palettePreview;
+    if (!preview) return;
+    const rgba = hsvToRgba(paletteEditorState.hsv.h, paletteEditorState.hsv.s, paletteEditorState.hsv.v);
+    const alpha = clamp(paletteEditorState.hsv.a, 0, 255) / 255;
+    preview.style.setProperty('--palette-preview-color', `rgba(${rgba.r}, ${rgba.g}, ${rgba.b}, ${alpha.toFixed(3)})`);
+    preview.classList.toggle('is-filled', paletteEditorState.hsv.a > 0);
+    const saturationSlider = dom.controls.paletteSaturation;
+    if (saturationSlider) {
+      const startColor = hsvToRgba(paletteEditorState.hsv.h, 0, paletteEditorState.hsv.v);
+      const endColor = hsvToRgba(paletteEditorState.hsv.h, 1, paletteEditorState.hsv.v);
+      saturationSlider.style.background = `linear-gradient(90deg, ${rgbaToCss(startColor)} 0%, ${rgbaToCss(endColor)} 100%)`;
+    }
+    const valueSlider = dom.controls.paletteValue;
+    if (valueSlider) {
+      const lowColor = hsvToRgba(paletteEditorState.hsv.h, paletteEditorState.hsv.s, 0);
+      const highColor = hsvToRgba(paletteEditorState.hsv.h, paletteEditorState.hsv.s, 1);
+      valueSlider.style.background = `linear-gradient(90deg, ${rgbaToCss(lowColor)} 0%, ${rgbaToCss(highColor)} 100%)`;
+    }
+  }
+
+  function configurePaletteWheelCanvas() {
+    const canvas = dom.controls.paletteWheel;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dpr = window.devicePixelRatio || 1;
+    const size = Math.round(Math.max(rect.width, rect.height) * dpr);
+    if (canvas.width !== size || canvas.height !== size) {
+      canvas.width = size;
+      canvas.height = size;
+    }
+  }
+
+  function drawPaletteWheel() {
+    const canvas = dom.controls.paletteWheel;
+    if (!canvas || !paletteWheelCtx) return;
+    configurePaletteWheelCanvas();
+    const size = canvas.width;
+    if (!size) return;
+    const value = clamp(paletteEditorState.hsv.v, 0, 1);
+    const imageData = paletteWheelCtx.createImageData(size, size);
+    const data = imageData.data;
+    const radius = size / 2;
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const dx = x + 0.5 - radius;
+        const dy = y + 0.5 - radius;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const index = (y * size + x) * 4;
+        if (distance > radius) {
+          data[index + 3] = 0;
+          continue;
+        }
+        const saturation = clamp(distance / radius, 0, 1);
+        let hue = Math.atan2(dy, dx) * (180 / Math.PI);
+        if (hue < 0) hue += 360;
+        const rgba = hsvToRgba(hue, saturation, value);
+        data[index] = rgba.r;
+        data[index + 1] = rgba.g;
+        data[index + 2] = rgba.b;
+        data[index + 3] = 255;
+      }
+    }
+    paletteWheelCtx.putImageData(imageData, 0, 0);
+  }
+
+  function updatePaletteWheelCursor() {
+    const cursor = dom.controls.paletteWheelCursor;
+    const canvas = dom.controls.paletteWheel;
+    if (!cursor || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const radius = rect.width / 2;
+    const angle = (paletteEditorState.hsv.h * Math.PI) / 180;
+    const distance = clamp(paletteEditorState.hsv.s, 0, 1) * radius;
+    const x = radius + Math.cos(angle) * distance;
+    const y = radius + Math.sin(angle) * distance;
+    cursor.style.left = `${x}px`;
+    cursor.style.top = `${y}px`;
+  }
+
+  function writePaletteColorFromHsv() {
+    const active = state.palette[state.activePaletteIndex];
+    if (!active) return;
+    beginHistory('paletteColor');
+    const rgba = hsvToRgba(paletteEditorState.hsv.h, paletteEditorState.hsv.s, paletteEditorState.hsv.v);
+    rgba.a = Math.round(paletteEditorState.hsv.a);
+    Object.assign(active, rgba);
+    applyPaletteChange();
+    commitHistory();
+    renderPalette();
+  }
+
+  function handlePaletteWheelPointerDown(event) {
+    const wheel = dom.controls.paletteWheel;
+    if (!wheel) return;
+    event.preventDefault();
+    if (paletteEditorState.wheelPointer.upHandler) {
+      window.removeEventListener('pointerup', paletteEditorState.wheelPointer.upHandler);
+      paletteEditorState.wheelPointer.upHandler = null;
+    }
+    paletteEditorState.wheelPointer.active = true;
+    paletteEditorState.wheelPointer.pointerId = event.pointerId;
+    wheel.setPointerCapture?.(event.pointerId);
+    updatePaletteFromWheelEvent(event);
+    window.addEventListener('pointermove', handlePaletteWheelPointerMove);
+    const pointerUpHandler = evt => handlePaletteWheelPointerUp(evt);
+    paletteEditorState.wheelPointer.upHandler = pointerUpHandler;
+    window.addEventListener('pointerup', pointerUpHandler);
+  }
+
+  function handlePaletteWheelPointerMove(event) {
+    if (!paletteEditorState.wheelPointer.active || event.pointerId !== paletteEditorState.wheelPointer.pointerId) {
+      return;
+    }
+    updatePaletteFromWheelEvent(event);
+  }
+
+  function handlePaletteWheelPointerUp(event) {
+    const wheel = dom.controls.paletteWheel;
+    if (!paletteEditorState.wheelPointer.active || (paletteEditorState.wheelPointer.pointerId !== null && event.pointerId !== paletteEditorState.wheelPointer.pointerId)) {
+      return;
+    }
+    if (wheel && wheel.hasPointerCapture?.(event.pointerId)) {
+      wheel.releasePointerCapture(event.pointerId);
+    }
+    paletteEditorState.wheelPointer.active = false;
+    paletteEditorState.wheelPointer.pointerId = null;
+    if (paletteEditorState.wheelPointer.upHandler) {
+      window.removeEventListener('pointerup', paletteEditorState.wheelPointer.upHandler);
+      paletteEditorState.wheelPointer.upHandler = null;
+    }
+    window.removeEventListener('pointermove', handlePaletteWheelPointerMove);
+  }
+
+  function updatePaletteFromWheelEvent(event) {
+    const wheel = dom.controls.paletteWheel;
+    if (!wheel) return;
+    const rect = wheel.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const scale = wheel.width / rect.width;
+    const x = (event.clientX - rect.left) * scale;
+    const y = (event.clientY - rect.top) * scale;
+    const radius = wheel.width / 2;
+    const dx = x - radius;
+    const dy = y - radius;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const maxRadius = radius;
+    const clampedDistance = Math.min(distance, maxRadius);
+    let hue = Math.atan2(dy, dx) * (180 / Math.PI);
+    if (hue < 0) hue += 360;
+    const saturation = clamp(clampedDistance / maxRadius, 0, 1);
+    paletteEditorState.hsv.h = hue;
+    paletteEditorState.hsv.s = saturation;
+    if (dom.controls.paletteHue) {
+      dom.controls.paletteHue.value = String(Math.round(hue));
+    }
+    if (dom.controls.paletteSaturation) {
+      dom.controls.paletteSaturation.value = String(Math.round(saturation * 100));
+    }
+    updatePaletteWheelCursor();
+    updatePalettePreview();
+    updatePaletteAlphaOutput();
+    writePaletteColorFromHsv();
   }
 
   function setupFramesAndLayers() {
@@ -4528,6 +4754,65 @@
 
   function rgbaToCss({ r, g, b, a }) {
     return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
+  }
+
+  function rgbaToHsv({ r, g, b }) {
+    const rn = clamp(r, 0, 255) / 255;
+    const gn = clamp(g, 0, 255) / 255;
+    const bn = clamp(b, 0, 255) / 255;
+    const max = Math.max(rn, gn, bn);
+    const min = Math.min(rn, gn, bn);
+    const delta = max - min;
+    let h = 0;
+    if (delta !== 0) {
+      if (max === rn) {
+        h = ((gn - bn) / delta) % 6;
+      } else if (max === gn) {
+        h = (bn - rn) / delta + 2;
+      } else {
+        h = (rn - gn) / delta + 4;
+      }
+      h *= 60;
+      if (h < 0) h += 360;
+    }
+    const s = max === 0 ? 0 : delta / max;
+    const v = max;
+    return { h, s, v };
+  }
+
+  function hsvToRgba(h, s, v) {
+    const hue = ((h % 360) + 360) % 360;
+    const saturation = clamp(s, 0, 1);
+    const value = clamp(v, 0, 1);
+    const c = value * saturation;
+    const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = value - c;
+    let rp = 0;
+    let gp = 0;
+    let bp = 0;
+    if (hue < 60) {
+      rp = c;
+      gp = x;
+    } else if (hue < 120) {
+      rp = x;
+      gp = c;
+    } else if (hue < 180) {
+      gp = c;
+      bp = x;
+    } else if (hue < 240) {
+      gp = x;
+      bp = c;
+    } else if (hue < 300) {
+      rp = x;
+      bp = c;
+    } else {
+      rp = c;
+      bp = x;
+    }
+    const r = Math.round((rp + m) * 255);
+    const g = Math.round((gp + m) * 255);
+    const b = Math.round((bp + m) * 255);
+    return { r, g, b, a: 255 };
   }
 
   function getActiveDrawColor(opacityOverride) {
