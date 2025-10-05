@@ -85,6 +85,16 @@
       enableAutosave: document.getElementById('enableAutosave'),
       autosaveStatus: document.getElementById('autosaveStatus'),
     },
+    newProject: {
+      button: document.getElementById('newProject'),
+      dialog: /** @type {HTMLDialogElement|null} */ (document.getElementById('newProjectDialog')),
+      form: document.getElementById('newProjectForm'),
+      nameInput: document.getElementById('newProjectName'),
+      widthInput: document.getElementById('newProjectWidth'),
+      heightInput: document.getElementById('newProjectHeight'),
+      cancel: document.getElementById('cancelNewProject'),
+      confirm: document.getElementById('confirmNewProject'),
+    },
   };
 
   const LEFT_TAB_KEYS = ['tools', 'color'];
@@ -109,6 +119,10 @@
     });
     return acc;
   }, {});
+
+  const DEFAULT_DOCUMENT_NAME = '新規ドキュメント';
+  const MIN_CANVAS_SIZE = 1;
+  const MAX_CANVAS_SIZE = 256;
 
   const layoutMap = {
     tools: { desktop: dom.leftTabPanes || dom.leftRail, mobile: dom.mobilePanels.tools },
@@ -179,9 +193,14 @@
   let lastFrameTime = 0;
   let curveBuilder = null;
 
-  function createInitialState() {
-    const width = 128;
-    const height = 128;
+  function createInitialState(options = {}) {
+    const {
+      width: requestedWidth = 128,
+      height: requestedHeight = 128,
+      name: requestedName = DEFAULT_DOCUMENT_NAME,
+    } = options || {};
+    const width = clamp(Math.round(Number(requestedWidth) || 128), MIN_CANVAS_SIZE, MAX_CANVAS_SIZE);
+    const height = clamp(Math.round(Number(requestedHeight) || 128), MIN_CANVAS_SIZE, MAX_CANVAS_SIZE);
     const palette = [
       { r: 0, g: 0, b: 0, a: 0 },
       { r: 20, g: 20, b: 20, a: 255 },
@@ -221,6 +240,7 @@
       selectionMask: null,
       selectionBounds: null,
       playback: { isPlaying: false, lastFrame: 0 },
+      documentName: normalizeDocumentName(requestedName),
     };
   }
 
@@ -315,6 +335,7 @@
       showPixelGuides: state.showPixelGuides,
       showChecker: state.showChecker,
       playback: { ...state.playback },
+      documentName: state.documentName,
     };
   }
 
@@ -359,6 +380,7 @@
     state.showPixelGuides = snapshot.showPixelGuides;
     state.showChecker = snapshot.showChecker;
     state.playback = { ...snapshot.playback };
+    state.documentName = normalizeDocumentName(snapshot.documentName);
 
     pointerState.active = false;
     pointerState.preview = null;
@@ -379,7 +401,39 @@
     requestRender();
     requestOverlayRender();
     updateHistoryButtons();
+    updateDocumentMetadata();
     scheduleSessionPersist();
+  }
+
+  function normalizeDocumentName(value) {
+    if (typeof value !== 'string') {
+      return DEFAULT_DOCUMENT_NAME;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return DEFAULT_DOCUMENT_NAME;
+    }
+    return trimmed.slice(0, 120);
+  }
+
+  function updateDocumentMetadata() {
+    const name = normalizeDocumentName(state.documentName);
+    if (state.documentName !== name) {
+      state.documentName = name;
+    }
+    const baseTitle = 'PiXiEEDraw';
+    document.title = `${name} • ${baseTitle}`;
+  }
+
+  function createAutosaveFileName(name = state.documentName) {
+    const normalized = normalizeDocumentName(name);
+    const sanitized = normalized.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim();
+    let base = sanitized || DEFAULT_DOCUMENT_NAME;
+    const ext = '.pixieedraw';
+    if (base.toLowerCase().endsWith(ext)) {
+      return base;
+    }
+    return `${base}${ext}`;
   }
 
   function beginHistory(label) {
@@ -1107,7 +1161,7 @@
           return;
         }
       }
-      requestAutosaveBinding();
+      requestAutosaveBinding({ suggestedName: createAutosaveFileName() });
     });
   }
 
@@ -1213,11 +1267,13 @@
     }
   }
 
-  async function requestAutosaveBinding() {
+  async function requestAutosaveBinding(options = {}) {
     if (!AUTOSAVE_SUPPORTED) return;
     try {
+      const suggestedNameOption = typeof options.suggestedName === 'string' ? options.suggestedName.trim() : '';
+      const suggestedName = suggestedNameOption || createAutosaveFileName();
       const handle = await window.showSaveFilePicker({
-        suggestedName: 'pixieedraw-document.pixieedraw',
+        suggestedName,
         types: [
           {
             description: 'PiXiEEDraw ドキュメント',
@@ -1387,6 +1443,117 @@
       input.value = '';
     });
     input.click();
+  }
+
+  function openNewProjectDialog() {
+    const config = dom.newProject;
+    if (!config) {
+      promptNewProjectFallback();
+      return;
+    }
+    const dialog = config.dialog;
+    if (dialog && typeof dialog.showModal === 'function') {
+      if (config.nameInput) {
+        config.nameInput.value = state.documentName || DEFAULT_DOCUMENT_NAME;
+      }
+      if (config.widthInput) {
+        config.widthInput.value = String(state.width);
+      }
+      if (config.heightInput) {
+        config.heightInput.value = String(state.height);
+      }
+      dialog.showModal();
+      window.requestAnimationFrame(() => {
+        config.nameInput?.focus();
+        config.nameInput?.select?.();
+      });
+      return;
+    }
+    promptNewProjectFallback();
+  }
+
+  function closeNewProjectDialog() {
+    const dialog = dom.newProject?.dialog;
+    if (dialog && dialog.open) {
+      dialog.close();
+    }
+  }
+
+  function handleNewProjectSubmit() {
+    const config = dom.newProject;
+    if (config?.form && typeof config.form.reportValidity === 'function') {
+      if (!config.form.reportValidity()) {
+        return;
+      }
+    }
+    const name = config?.nameInput?.value ?? state.documentName;
+    const widthValue = config?.widthInput?.value;
+    const heightValue = config?.heightInput?.value;
+    const width = Number(widthValue);
+    const height = Number(heightValue);
+    const created = createNewProject({ name, width, height });
+    if (created) {
+      closeNewProjectDialog();
+    } else {
+      window.alert(`キャンバスサイズは${MIN_CANVAS_SIZE}〜${MAX_CANVAS_SIZE}の数値で入力してください。`);
+    }
+  }
+
+  function promptNewProjectFallback() {
+    const name = window.prompt('ファイル名を入力してください', state.documentName || DEFAULT_DOCUMENT_NAME);
+    if (name === null) return;
+    const widthRaw = window.prompt(`キャンバスの横幅 (${MIN_CANVAS_SIZE}〜${MAX_CANVAS_SIZE})`, String(state.width));
+    if (widthRaw === null) return;
+    const heightRaw = window.prompt(`キャンバスの縦幅 (${MIN_CANVAS_SIZE}〜${MAX_CANVAS_SIZE})`, String(state.height));
+    if (heightRaw === null) return;
+    const width = Number(widthRaw);
+    const height = Number(heightRaw);
+    if (!createNewProject({ name, width, height })) {
+      window.alert(`キャンバスサイズは${MIN_CANVAS_SIZE}〜${MAX_CANVAS_SIZE}の数値で入力してください。`);
+    }
+  }
+
+  function createNewProject({ name, width, height }) {
+    const widthNumber = Number(width);
+    const heightNumber = Number(height);
+    if (!Number.isFinite(widthNumber) || !Number.isFinite(heightNumber)) {
+      return false;
+    }
+    const clampedWidth = clamp(Math.round(widthNumber), MIN_CANVAS_SIZE, MAX_CANVAS_SIZE);
+    const clampedHeight = clamp(Math.round(heightNumber), MIN_CANVAS_SIZE, MAX_CANVAS_SIZE);
+    const snapshot = createInitialState({
+      width: clampedWidth,
+      height: clampedHeight,
+      name,
+    });
+
+    applyHistorySnapshot(snapshot);
+    history.past = [];
+    history.future = [];
+    history.pending = null;
+    updateHistoryButtons();
+
+    if (AUTOSAVE_SUPPORTED) {
+      autosaveHandle = null;
+      pendingAutosaveHandle = null;
+      clearPendingPermissionListener();
+      clearStoredAutosaveHandle().catch(error => {
+        console.warn('Failed to forget previous autosave handle', error);
+      });
+      const suggestedName = createAutosaveFileName(name);
+      if (dom.controls.enableAutosave) {
+        dom.controls.enableAutosave.textContent = '保存先を変更';
+      }
+      updateAutosaveStatus('自動保存: 保存先を選択してください', 'info');
+      requestAutosaveBinding({ suggestedName }).catch(error => {
+        console.warn('Autosave binding after new project failed', error);
+        updateAutosaveStatus('自動保存: 保存先を設定できませんでした', 'error');
+      });
+    } else {
+      updateAutosaveStatus('新しいプロジェクトを作成しました', 'info');
+    }
+    scheduleSessionPersist();
+    return true;
   }
 
   async function loadDocumentFromHandle(handle) {
@@ -1584,6 +1751,7 @@
       showPixelGuides: snapshot.showPixelGuides,
       showChecker: snapshot.showChecker,
       playback: { ...snapshot.playback },
+      documentName: normalizeDocumentName(snapshot.documentName),
     };
   }
 
@@ -1663,6 +1831,9 @@
     const lastGroupTool = normalizeLastGroupTool(payload.lastGroupTool);
     const activeLeftTab = LEFT_TAB_KEYS.includes(payload.activeLeftTab) ? payload.activeLeftTab : state.activeLeftTab;
     const activeRightTab = RIGHT_TAB_KEYS.includes(payload.activeRightTab) ? payload.activeRightTab : state.activeRightTab;
+    const documentName = normalizeDocumentName(
+      typeof payload.documentName === 'string' ? payload.documentName : (typeof payload.name === 'string' ? payload.name : state.documentName),
+    );
 
     return {
       width,
@@ -1701,6 +1872,7 @@
           lastFrame: Number(payload.playback.lastFrame) || 0,
         }
         : { isPlaying: false, lastFrame: 0 },
+      documentName,
     };
   }
 
@@ -1802,10 +1974,11 @@
     setupControls();
     setupTools();
     setupToolGroups();
-    setupPaletteEditor();
-    setupFramesAndLayers();
-    setupCanvas();
-    setupKeyboard();
+   setupPaletteEditor();
+   setupFramesAndLayers();
+   setupCanvas();
+   setupKeyboard();
+    updateDocumentMetadata();
     renderEverything();
   }
 
@@ -2035,6 +2208,29 @@
       openDocumentDialog();
     });
 
+    if (dom.newProject?.button) {
+      dom.newProject.button.addEventListener('click', () => {
+        openNewProjectDialog();
+      });
+    }
+    if (dom.newProject?.form) {
+      dom.newProject.form.addEventListener('submit', event => {
+        event.preventDefault();
+        handleNewProjectSubmit();
+      });
+    }
+    if (dom.newProject?.cancel) {
+      dom.newProject.cancel.addEventListener('click', () => {
+        closeNewProjectDialog();
+      });
+    }
+    if (dom.newProject?.dialog) {
+      dom.newProject.dialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        closeNewProjectDialog();
+      });
+    }
+
     dom.controls.canvasWidth?.addEventListener('change', handleCanvasResizeRequest);
     dom.controls.canvasHeight?.addEventListener('change', handleCanvasResizeRequest);
 
@@ -2063,8 +2259,8 @@
   }
 
   function handleCanvasResizeRequest() {
-    const width = clamp(Number(dom.controls.canvasWidth.value), 1, 256) || state.width;
-    const height = clamp(Number(dom.controls.canvasHeight.value), 1, 256) || state.height;
+    const width = clamp(Number(dom.controls.canvasWidth.value), MIN_CANVAS_SIZE, MAX_CANVAS_SIZE) || state.width;
+    const height = clamp(Number(dom.controls.canvasHeight.value), MIN_CANVAS_SIZE, MAX_CANVAS_SIZE) || state.height;
     if (width === state.width && height === state.height) {
       dom.controls.canvasWidth.value = String(state.width);
       dom.controls.canvasHeight.value = String(state.height);
@@ -2231,6 +2427,19 @@
     }
     if (tool !== 'curve') {
       resetCurveBuilder();
+    }
+    if (!pointerState.active) {
+      const toolChanged = pointerState.tool !== tool;
+      const hadPreview = Boolean(pointerState.preview || pointerState.selectionPreview || pointerState.selectionMove);
+      pointerState.tool = tool;
+      if (hadPreview) {
+        pointerState.preview = null;
+        pointerState.selectionPreview = null;
+        pointerState.selectionMove = null;
+      }
+      if (toolChanged || hadPreview) {
+        requestOverlayRender();
+      }
     }
     if (persist) {
       scheduleSessionPersist();
@@ -4217,6 +4426,7 @@
         backgroundMode: state.backgroundMode,
         toolGroup: state.activeToolGroup,
         lastGroupTool: { ...(state.lastGroupTool || DEFAULT_GROUP_TOOL) },
+        documentName: state.documentName,
       };
       window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
     } catch (error) {
@@ -4306,6 +4516,9 @@
       state.lastGroupTool = { ...DEFAULT_GROUP_TOOL };
     }
     state.activeToolGroup = state.activeToolGroup || TOOL_TO_GROUP[state.tool] || 'pen';
+    if (typeof payload.documentName === 'string') {
+      state.documentName = normalizeDocumentName(payload.documentName);
+    }
   }
 
   function rgbaToHex({ r, g, b, a }) {
