@@ -987,28 +987,23 @@
   function updateGridDecorations() {
     const stack = dom.canvases.stack;
     if (!stack) return;
-    const scale = Math.max(1, Math.round(state.scale || 1));
+    const scale = Math.max(Number(state.scale) || 1, 1);
+    const tileScreenSize = 16 * scale;
     const minorStep = scale;
-    const majorStep = Math.max(minorStep, Math.round(scale * (state.majorGridSpacing || 16)));
-    const minorOffsetX = ((state.pan.x % minorStep) + minorStep) % minorStep;
-    const minorOffsetY = ((state.pan.y % minorStep) + minorStep) % minorStep;
-    const majorOffsetX = ((state.pan.x % majorStep) + majorStep) % majorStep;
-    const majorOffsetY = ((state.pan.y % majorStep) + majorStep) % majorStep;
-    const tileScreenSize = scale * 16;
-    const tileOffsetX = ((state.pan.x % tileScreenSize) + tileScreenSize) % tileScreenSize;
-    const tileOffsetY = ((state.pan.y % tileScreenSize) + tileScreenSize) % tileScreenSize;
+    const majorMultiplier = Math.max(Number(state.majorGridSpacing) || 16, 1);
+    const majorStep = Math.max(minorStep, majorMultiplier * minorStep);
     state.gridScreenStep = minorStep;
     stack.dataset.grid = state.showGrid ? 'true' : 'false';
     stack.dataset.majorGrid = state.showMajorGrid ? 'true' : 'false';
     stack.style.setProperty('--grid-screen-step', `${minorStep}px`);
     stack.style.setProperty('--grid-major-step', `${majorStep}px`);
-    stack.style.setProperty('--grid-offset-x', `${minorOffsetX}px`);
-    stack.style.setProperty('--grid-offset-y', `${minorOffsetY}px`);
-    stack.style.setProperty('--grid-major-offset-x', `${majorOffsetX}px`);
-    stack.style.setProperty('--grid-major-offset-y', `${majorOffsetY}px`);
+    stack.style.setProperty('--grid-offset-x', '0px');
+    stack.style.setProperty('--grid-offset-y', '0px');
+    stack.style.setProperty('--grid-major-offset-x', '0px');
+    stack.style.setProperty('--grid-major-offset-y', '0px');
     stack.style.setProperty('--tile-screen-size', `${tileScreenSize}px`);
-    stack.style.setProperty('--tile-offset-x', `${tileOffsetX}px`);
-    stack.style.setProperty('--tile-offset-y', `${tileOffsetY}px`);
+    stack.style.setProperty('--tile-offset-x', '0px');
+    stack.style.setProperty('--tile-offset-y', '0px');
     stack.dataset.background = state.backgroundMode;
   }
 
@@ -1125,7 +1120,7 @@
       if (granted) {
         autosaveHandle = handle;
         if (button) {
-          button.textContent = '自動保存ファイルを変更';
+          button.textContent = '保存先を変更';
         }
         const restored = await restoreAutosaveDocument(handle);
         if (restored) {
@@ -1212,11 +1207,14 @@
     if (!AUTOSAVE_SUPPORTED) return;
     try {
       const handle = await window.showSaveFilePicker({
-        suggestedName: 'pixieedraw-document.json',
+        suggestedName: 'pixieedraw-document.pixieedraw',
         types: [
           {
             description: 'PiXiEEDraw ドキュメント',
-            accept: { 'application/json': ['.json', '.pxdraw'] },
+            accept: {
+              'application/json': ['.json', '.pxdraw', '.pixieedraw'],
+              'application/x-pixieedraw': ['.pixieedraw'],
+            },
           },
         ],
       });
@@ -1230,7 +1228,7 @@
       clearPendingPermissionListener();
       await storeAutosaveHandle(handle);
       if (dom.controls.enableAutosave) {
-        dom.controls.enableAutosave.textContent = '自動保存ファイルを変更';
+        dom.controls.enableAutosave.textContent = '保存先を変更';
       }
       updateAutosaveStatus('自動保存: 保存中…');
       await writeAutosaveSnapshot();
@@ -1308,7 +1306,7 @@
     pendingAutosaveHandle = null;
     autosaveHandle = handle;
     if (dom.controls.enableAutosave) {
-      dom.controls.enableAutosave.textContent = '自動保存ファイルを変更';
+      dom.controls.enableAutosave.textContent = '保存先を変更';
     }
     try {
       const restored = await restoreAutosaveDocument(handle);
@@ -1332,7 +1330,10 @@
           types: [
             {
               description: 'PiXiEEDraw ドキュメント',
-              accept: { 'application/json': ['.json', '.pxdraw'] },
+              accept: {
+                'application/json': ['.json', '.pxdraw', '.pixieedraw'],
+                'application/x-pixieedraw': ['.pixieedraw'],
+              },
             },
           ],
         });
@@ -1354,7 +1355,7 @@
   function openDocumentViaInput() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json,.pxdraw,application/json';
+    input.accept = '.json,.pxdraw,.pixieedraw,application/json,application/x-pixieedraw';
     input.addEventListener('change', async () => {
       const file = input.files && input.files[0];
       if (!file) {
@@ -1414,7 +1415,7 @@
         clearPendingPermissionListener();
         await storeAutosaveHandle(handle);
         if (dom.controls.enableAutosave) {
-          dom.controls.enableAutosave.textContent = '自動保存ファイルを変更';
+          dom.controls.enableAutosave.textContent = '保存先を変更';
         }
         updateAutosaveStatus('自動保存: 有効', 'success');
       } else {
@@ -1658,8 +1659,8 @@
       height,
       scale: clamp(Math.round(Number(payload.scale) || state.scale || 1), 1, 40),
       pan: {
-        x: Number(payload.pan?.x) || 0,
-        y: Number(payload.pan?.y) || 0,
+        x: Math.round(Number(payload.pan?.x) || 0),
+        y: Math.round(Number(payload.pan?.y) || 0),
       },
       tool: activeTool,
       brushSize: clamp(Math.round(Number(payload.brushSize) || state.brushSize || 1), 1, 64),
@@ -1771,7 +1772,15 @@
 
   function applyViewportTransform() {
     if (!dom.canvases.stack) return;
-    dom.canvases.stack.style.transform = `translate(${state.pan.x}px, ${state.pan.y}px)`;
+    const panX = Math.round(Number(state.pan.x) || 0);
+    const panY = Math.round(Number(state.pan.y) || 0);
+    if (panX !== state.pan.x) {
+      state.pan.x = panX;
+    }
+    if (panY !== state.pan.y) {
+      state.pan.y = panY;
+    }
+    dom.canvases.stack.style.transform = `translate(${panX}px, ${panY}px)`;
     updateGridDecorations();
   }
 
@@ -1819,36 +1828,55 @@
       });
     });
 
-    document.querySelectorAll('.panel-collapse').forEach(button => {
-      button.addEventListener('click', () => {
-        if (layoutMode === 'mobilePortrait') {
-          return;
-        }
-        const action = button.dataset.action;
-        if (action === 'collapseLeft') {
-          rails.leftCollapsed = !rails.leftCollapsed;
-          dom.leftRail.dataset.collapsed = rails.leftCollapsed ? 'true' : 'false';
-        } else if (action === 'collapseRight') {
-          rails.rightCollapsed = !rails.rightCollapsed;
-          dom.rightRail.dataset.collapsed = rails.rightCollapsed ? 'true' : 'false';
-        }
-        updateRailToggleVisibility();
-      });
-    });
-
     dom.toggles.left?.addEventListener('click', () => {
-      rails.leftCollapsed = false;
-      dom.leftRail.dataset.collapsed = 'false';
-      updateRailToggleVisibility();
+      if (layoutMode === 'mobilePortrait') {
+        return;
+      }
+      toggleRailCollapsed('left');
     });
 
     dom.toggles.right?.addEventListener('click', () => {
-      rails.rightCollapsed = false;
-      dom.rightRail.dataset.collapsed = 'false';
-      updateRailToggleVisibility();
+      if (layoutMode === 'mobilePortrait') {
+        return;
+      }
+      toggleRailCollapsed('right');
     });
 
     updateRailToggleVisibility();
+  }
+
+  function setRailCollapsed(side, collapsed) {
+    const isLeft = side === 'left';
+    const railNode = isLeft ? dom.leftRail : dom.rightRail;
+    if (!railNode) return;
+    if (isLeft) {
+      rails.leftCollapsed = collapsed;
+    } else {
+      rails.rightCollapsed = collapsed;
+    }
+    railNode.dataset.collapsed = collapsed ? 'true' : 'false';
+  }
+
+  function toggleRailCollapsed(side) {
+    const isLeft = side === 'left';
+    const railNode = isLeft ? dom.leftRail : dom.rightRail;
+    if (!railNode) return;
+    const collapsed = railNode.dataset.collapsed === 'true';
+    setRailCollapsed(side, !collapsed);
+    updateRailToggleVisibility();
+  }
+
+  function updateRailMetrics() {
+    const layoutNode = dom.layout;
+    if (!layoutNode) return;
+    const isMobile = layoutMode === 'mobilePortrait';
+    const leftCollapsed = isMobile || dom.leftRail?.dataset.collapsed === 'true';
+    const rightCollapsed = isMobile || dom.rightRail?.dataset.collapsed === 'true';
+    const leftWidth = !leftCollapsed && dom.leftRail ? dom.leftRail.offsetWidth : 0;
+    const rightWidth = !rightCollapsed && dom.rightRail ? dom.rightRail.offsetWidth : 0;
+    const toggleMargin = 12;
+    layoutNode.style.setProperty('--left-toggle-offset', `${leftWidth ? leftWidth + toggleMargin : toggleMargin}px`);
+    layoutNode.style.setProperty('--right-toggle-offset', `${rightWidth ? rightWidth + toggleMargin : toggleMargin}px`);
   }
 
   function updateLayoutMode() {
@@ -1864,6 +1892,7 @@
     }
 
     if (layoutMode === nextMode) {
+      updateRailToggleVisibility();
       return;
     }
 
@@ -1910,11 +1939,20 @@
     const isMobile = layoutMode === 'mobilePortrait';
     const leftCollapsed = dom.leftRail?.dataset.collapsed === 'true';
     const rightCollapsed = dom.rightRail?.dataset.collapsed === 'true';
+    updateRailMetrics();
     if (dom.toggles.left) {
-      dom.toggles.left.classList.toggle('is-visible', !isMobile && leftCollapsed);
+      const showToggle = !isMobile;
+      dom.toggles.left.classList.toggle('is-visible', showToggle);
+      dom.toggles.left.textContent = leftCollapsed ? '⟨' : '⟩';
+      dom.toggles.left.setAttribute('aria-label', leftCollapsed ? '左パネルを表示' : '左パネルを隠す');
+      dom.toggles.left.setAttribute('aria-pressed', leftCollapsed ? 'false' : 'true');
     }
     if (dom.toggles.right) {
-      dom.toggles.right.classList.toggle('is-visible', !isMobile && rightCollapsed);
+      const showToggle = !isMobile;
+      dom.toggles.right.classList.toggle('is-visible', showToggle);
+      dom.toggles.right.textContent = rightCollapsed ? '⟩' : '⟨';
+      dom.toggles.right.setAttribute('aria-label', rightCollapsed ? '右パネルを表示' : '右パネルを隠す');
+      dom.toggles.right.setAttribute('aria-pressed', rightCollapsed ? 'false' : 'true');
     }
   }
 
@@ -2590,8 +2628,8 @@
     if (scale === prevScale) return;
     const ratio = scale / prevScale;
     state.scale = scale;
-    state.pan.x *= ratio;
-    state.pan.y *= ratio;
+    state.pan.x = Math.round((Number(state.pan.x) || 0) * ratio);
+    state.pan.y = Math.round((Number(state.pan.y) || 0) * ratio);
     resizeCanvases();
     scheduleSessionPersist();
   }
@@ -2710,8 +2748,10 @@
     if (pointerState.tool === 'pan') {
       const dx = event.clientX - (pointerState.startClient?.x || 0);
       const dy = event.clientY - (pointerState.startClient?.y || 0);
-      state.pan.x = pointerState.panOrigin.x + dx;
-      state.pan.y = pointerState.panOrigin.y + dy;
+      const originX = pointerState.panOrigin?.x || 0;
+      const originY = pointerState.panOrigin?.y || 0;
+      state.pan.x = Math.round(originX + dx);
+      state.pan.y = Math.round(originY + dy);
       applyViewportTransform();
       return;
     }
@@ -3606,14 +3646,17 @@
     try {
       const snapshot = {
         scale: clamp(Math.round(state.scale || 1), 1, 40),
-        pan: { x: Number(state.pan?.x) || 0, y: Number(state.pan?.y) || 0 },
+        pan: {
+          x: Math.round(Number(state.pan?.x) || 0),
+          y: Math.round(Number(state.pan?.y) || 0),
+        },
         tool: state.tool,
         brushSize: clamp(Math.round(state.brushSize || 1), 1, 32),
         brushOpacity: clamp(Number(state.brushOpacity ?? 1), 0, 1),
         showGrid: Boolean(state.showGrid),
         gridScreenStep: clamp(Math.round(state.gridScreenStep || 16), 1, 256),
         showMajorGrid: Boolean(state.showMajorGrid),
-        majorGridSpacing: clamp(Math.round(state.majorGridSpacing || 64), 2, 512),
+        majorGridSpacing: clamp(Math.round(state.majorGridSpacing || 16), 2, 512),
         showPixelGuides: Boolean(state.showPixelGuides),
         showChecker: Boolean(state.showChecker),
         activeFrame: clamp(Number(state.activeFrame) || 0, 0, state.frames.length - 1),
@@ -3650,8 +3693,8 @@
       state.scale = clamp(Math.round(payload.scale), 1, 40);
     }
     if (payload.pan && Number.isFinite(payload.pan.x) && Number.isFinite(payload.pan.y)) {
-      state.pan.x = payload.pan.x;
-      state.pan.y = payload.pan.y;
+      state.pan.x = Math.round(payload.pan.x);
+      state.pan.y = Math.round(payload.pan.y);
     }
     if (typeof payload.tool === 'string') {
       state.tool = payload.tool;
