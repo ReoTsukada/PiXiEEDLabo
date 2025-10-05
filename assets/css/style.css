@@ -60,15 +60,18 @@ button {
 }
 
 .layout {
+  position: relative;
   flex: 1;
-  display: grid;
-  grid-template-columns: var(--left-width) minmax(0, 1fr) var(--right-width);
-  grid-template-rows: 100%;
   min-height: 0;
+  overflow: hidden;
+  --left-toggle-offset: 12px;
+  --right-toggle-offset: 12px;
 }
 
 .rail {
-  position: relative;
+  position: absolute;
+  top: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -77,6 +80,8 @@ button {
   background: linear-gradient(180deg, rgba(13, 17, 24, 0.94), rgba(13, 17, 24, 0.86));
   overflow-y: auto;
   scrollbar-width: thin;
+  transition: transform 200ms ease;
+  z-index: 20;
 }
 
 .rail-tabs {
@@ -168,27 +173,38 @@ button {
   gap: 12px;
 }
 
-.rail--left[data-collapsed="true"],
-.rail--right[data-collapsed="true"] {
-  width: 0;
-  min-width: 0;
-  padding: 0;
-  border: none;
-  overflow: hidden;
+.rail--left {
+  left: 0;
+  width: var(--left-width);
+  border-right: 1px solid var(--border);
+  transform: translateX(0);
+}
+
+.rail--left[data-collapsed="true"] {
+  transform: translateX(calc(-100% - 24px));
 }
 
 .rail--right {
+  right: 0;
+  width: var(--right-width);
   border-right: none;
   border-left: 1px solid var(--border);
+  transform: translateX(0);
+}
+
+.rail--right[data-collapsed="true"] {
+  transform: translateX(calc(100% + 24px));
 }
 
 .stage {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  padding: 18px;
+  padding: 24px;
   min-width: 0;
+  z-index: 10;
 }
 
 .stage__canvas {
@@ -219,8 +235,8 @@ button {
   --grid-major-offset-y: 0px;
   --grid-color: rgba(255, 255, 255, 0.18);
   --grid-major-color: rgba(255, 255, 255, 0.35);
-  --grid-line-width: 0.75px;
-  --grid-major-line-width: 1.1px;
+  --grid-line-width: 1px;
+  --grid-major-line-width: 1px;
   background-color: var(--tile-color-b);
   background-image: repeating-conic-gradient(
     var(--tile-color-a) 0deg 90deg,
@@ -369,7 +385,7 @@ button {
   justify-content: center;
   font-size: 1.2rem;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-  z-index: 5;
+  z-index: 40;
 }
 
 .rail-toggle:hover {
@@ -377,11 +393,11 @@ button {
 }
 
 .rail-toggle--left {
-  left: 12px;
+  left: var(--left-toggle-offset);
 }
 
 .rail-toggle--right {
-  right: 12px;
+  right: var(--right-toggle-offset);
 }
 
 .rail-toggle.is-visible {
@@ -448,36 +464,6 @@ button {
   font-size: 1.05rem;
   margin: 0;
   letter-spacing: 0.04em;
-}
-
-.panel-collapse {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(88, 196, 255, 0.1);
-  position: relative;
-}
-
-.panel-collapse::before,
-.panel-collapse::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 10px;
-  height: 2px;
-  background: currentColor;
-  transform-origin: center;
-  transition: transform 160ms ease;
-}
-
-.panel-collapse::before {
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-.panel-collapse::after {
-  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 .field {
@@ -728,7 +714,11 @@ button {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 10px 16px;
+  min-height: 44px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(88, 196, 255, 0.16);
@@ -739,6 +729,15 @@ button {
 .button:hover {
   background: rgba(88, 196, 255, 0.24);
   border-color: rgba(88, 196, 255, 0.4);
+}
+
+#panelSettings .button {
+  display: flex;
+  width: 100%;
+}
+
+#panelSettings .button + .button {
+  margin-top: 8px;
 }
 
 .help-text {
@@ -819,9 +818,6 @@ button {
     --left-width: 180px;
     --right-width: 200px;
   }
-  .layout {
-    grid-template-columns: var(--left-width) minmax(0, 1fr) var(--right-width);
-  }
 }
 
 @media (max-width: 900px) and (orientation: portrait) {
@@ -868,10 +864,6 @@ button {
   border: none;
   box-shadow: none;
   padding: 0;
-}
-
-.panel-section--mobile .panel-collapse {
-  display: none;
 }
 
 .panel-section--mobile .panel-section__header {
