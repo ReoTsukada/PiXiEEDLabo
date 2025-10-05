@@ -167,27 +167,31 @@
                 <span>インデックス</span>
                 <input type="number" id="paletteIndex" min="0" step="1" />
               </label>
-              <label class="field field--compact">
-                <span>色</span>
-                <input type="color" id="paletteColor" />
-              </label>
-              <div class="palette-rgb-fields">
-                <label class="field field--tiny">
-                  <span>R</span>
-                  <input type="number" id="paletteR" min="0" max="255" />
-                </label>
-                <label class="field field--tiny">
-                  <span>G</span>
-                  <input type="number" id="paletteG" min="0" max="255" />
-                </label>
-                <label class="field field--tiny">
-                  <span>B</span>
-                  <input type="number" id="paletteB" min="0" max="255" />
-                </label>
-                <label class="field field--tiny">
-                  <span>A</span>
-                  <input type="number" id="paletteA" min="0" max="255" />
-                </label>
+              <div class="palette-hsv" id="paletteHsvControls">
+                <div class="palette-wheel" id="paletteWheelWrapper">
+                  <canvas id="paletteColorWheel" width="220" height="220" aria-label="色相環"></canvas>
+                  <div class="palette-wheel__cursor" id="paletteWheelCursor"></div>
+                </div>
+                <div class="palette-sliders">
+                  <div class="palette-preview" id="palettePreview" aria-hidden="true"></div>
+                  <label class="field field--compact">
+                    <span>色相</span>
+                    <input type="range" id="paletteHue" min="0" max="360" value="0" />
+                  </label>
+                  <label class="field field--compact">
+                    <span>彩度</span>
+                    <input type="range" id="paletteSaturation" min="0" max="100" value="0" />
+                  </label>
+                  <label class="field field--compact">
+                    <span>明度</span>
+                    <input type="range" id="paletteValue" min="0" max="100" value="100" />
+                  </label>
+                  <label class="field field--compact palette-alpha-field">
+                    <span>アルファ</span>
+                    <input type="range" id="paletteAlphaSlider" min="0" max="255" value="255" />
+                    <output id="paletteAlphaValue" for="paletteAlphaSlider">255</output>
+                  </label>
+                </div>
               </div>
             </div>
           </div>
