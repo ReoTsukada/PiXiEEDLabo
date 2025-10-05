@@ -32,6 +32,7 @@
       stack: document.getElementById('canvasStack'),
       drawing: /** @type {HTMLCanvasElement} */ (document.getElementById('drawingCanvas')),
       overlay: /** @type {HTMLCanvasElement} */ (document.getElementById('overlayCanvas')),
+      selection: /** @type {HTMLCanvasElement} */ (document.getElementById('selectionCanvas')),
     },
     toggles: {
       left: document.getElementById('openLeftRail'),
@@ -117,8 +118,9 @@
   };
 
   const ctx = {
-    drawing: dom.canvases.drawing.getContext('2d', { willReadFrequently: true }),
-    overlay: dom.canvases.overlay.getContext('2d', { willReadFrequently: true }),
+    drawing: dom.canvases.drawing?.getContext('2d', { willReadFrequently: true }) || null,
+    overlay: dom.canvases.overlay?.getContext('2d', { willReadFrequently: true }) || null,
+    selection: dom.canvases.selection?.getContext('2d', { willReadFrequently: true }) || null,
   };
 
   if (ctx.drawing) {
@@ -126,6 +128,9 @@
   }
   if (ctx.overlay) {
     ctx.overlay.imageSmoothingEnabled = false;
+  }
+  if (ctx.selection) {
+    ctx.selection.imageSmoothingEnabled = false;
   }
 
   const SESSION_STORAGE_KEY = 'pixieedraw:sessionState';
@@ -2602,20 +2607,39 @@
 
   function resizeCanvases() {
     const { width, height, scale } = state;
-    dom.canvases.drawing.width = width;
-    dom.canvases.drawing.height = height;
-    dom.canvases.overlay.width = width;
-    dom.canvases.overlay.height = height;
+    if (dom.canvases.drawing) {
+      dom.canvases.drawing.width = width;
+      dom.canvases.drawing.height = height;
+    }
+    if (dom.canvases.overlay) {
+      dom.canvases.overlay.width = width;
+      dom.canvases.overlay.height = height;
+    }
+    if (dom.canvases.selection) {
+      dom.canvases.selection.width = width;
+      dom.canvases.selection.height = height;
+    }
     if (ctx.drawing) {
       ctx.drawing.imageSmoothingEnabled = false;
     }
     if (ctx.overlay) {
       ctx.overlay.imageSmoothingEnabled = false;
     }
-    dom.canvases.drawing.style.width = `${width * scale}px`;
-    dom.canvases.drawing.style.height = `${height * scale}px`;
-    dom.canvases.overlay.style.width = `${width * scale}px`;
-    dom.canvases.overlay.style.height = `${height * scale}px`;
+    if (ctx.selection) {
+      ctx.selection.imageSmoothingEnabled = false;
+    }
+    if (dom.canvases.drawing) {
+      dom.canvases.drawing.style.width = `${width * scale}px`;
+      dom.canvases.drawing.style.height = `${height * scale}px`;
+    }
+    if (dom.canvases.overlay) {
+      dom.canvases.overlay.style.width = `${width * scale}px`;
+      dom.canvases.overlay.style.height = `${height * scale}px`;
+    }
+    if (dom.canvases.selection) {
+      dom.canvases.selection.style.width = `${width * scale}px`;
+      dom.canvases.selection.style.height = `${height * scale}px`;
+    }
     applyViewportTransform();
     syncControlsWithState();
     renderCanvas();
@@ -3291,7 +3315,12 @@
 
   function renderOverlay() {
     const { width, height } = state;
-    ctx.overlay.clearRect(0, 0, width, height);
+    if (ctx.overlay) {
+      ctx.overlay.clearRect(0, 0, width, height);
+    }
+    if (ctx.selection) {
+      ctx.selection.clearRect(0, 0, width, height);
+    }
     if (state.selectionMask) {
       drawSelectionOverlay();
     }
@@ -3303,7 +3332,7 @@
       drawBrushCrosshair(focusPixel, overrideSize);
     }
 
-    if (!pointerState.active && activeTool === 'fill' && focusPixel) {
+    if (ctx.overlay && !pointerState.active && activeTool === 'fill' && focusPixel) {
       const previewPixels = getFillPreviewPixels(focusPixel.x, focusPixel.y);
       if (previewPixels && previewPixels.length) {
         ctx.overlay.save();
@@ -3317,11 +3346,11 @@
       }
     }
 
-    if (pointerState.preview && (pointerState.tool === 'line' || pointerState.tool === 'rect' || pointerState.tool === 'rectFill' || pointerState.tool === 'ellipse' || pointerState.tool === 'ellipseFill' || pointerState.tool === 'curve')) {
+    if (pointerState.preview && ctx.overlay && (pointerState.tool === 'line' || pointerState.tool === 'rect' || pointerState.tool === 'rectFill' || pointerState.tool === 'ellipse' || pointerState.tool === 'ellipseFill' || pointerState.tool === 'curve')) {
       drawPreviewShape(pointerState);
     }
 
-    if (state.tool === 'curve' && curveBuilder) {
+    if (ctx.overlay && state.tool === 'curve' && curveBuilder) {
       drawCurveGuides(curveBuilder);
     }
 
@@ -3436,21 +3465,78 @@
   }
 
   function drawSelectionOverlay() {
+    const mask = state.selectionMask;
+    if (!mask) return;
     const { width, height } = state;
-    ctx.overlay.save();
-    ctx.overlay.strokeStyle = 'rgba(255,255,255,0.7)';
-    ctx.overlay.lineWidth = 0.5;
-    ctx.overlay.setLineDash([1, 1]);
-    ctx.overlay.beginPath();
+    strokeSelectionPath(pathCtx => {
+      traceSelectionOutline(pathCtx, mask, width, height);
+    }, { translateHalf: true });
+  }
+
+  function strokeSelectionPath(trace, options = {}) {
+    if (typeof trace !== 'function') return;
+    const targetCtx = ctx.selection || ctx.overlay;
+    if (!targetCtx || typeof targetCtx.setLineDash !== 'function') {
+      return;
+    }
+    const scale = Math.max(Number(state.scale) || 1, 1);
+    const lineWidth = 1 / scale;
+    const dashLength = 1 / scale;
+    const dashPattern = [dashLength, dashLength];
+
+    targetCtx.save();
+    if (options.translateHalf) {
+      targetCtx.translate(0.5, 0.5);
+    }
+    targetCtx.lineWidth = lineWidth;
+    targetCtx.setLineDash(dashPattern);
+    targetCtx.lineJoin = 'miter';
+    targetCtx.lineCap = 'butt';
+
+    targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    targetCtx.lineDashOffset = 0;
+    targetCtx.beginPath();
+    trace(targetCtx);
+    targetCtx.stroke();
+
+    targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    targetCtx.lineDashOffset = dashLength;
+    targetCtx.beginPath();
+    trace(targetCtx);
+    targetCtx.stroke();
+
+    targetCtx.restore();
+  }
+
+  function traceSelectionOutline(pathCtx, mask, width, height) {
     for (let y = 0; y < height; y += 1) {
+      const rowOffset = y * width;
       for (let x = 0; x < width; x += 1) {
-        if (state.selectionMask[y * width + x] === 1) {
-          ctx.overlay.strokeRect(x, y, 1, 1);
+        const idx = rowOffset + x;
+        if (mask[idx] !== 1) continue;
+        const topFilled = y > 0 && mask[idx - width] === 1;
+        const bottomFilled = y < height - 1 && mask[idx + width] === 1;
+        const leftFilled = x > 0 && mask[idx - 1] === 1;
+        const rightFilled = x < width - 1 && mask[idx + 1] === 1;
+
+        if (!topFilled) {
+          pathCtx.moveTo(x, y);
+          pathCtx.lineTo(x + 1, y);
+        }
+        if (!bottomFilled) {
+          pathCtx.moveTo(x, y + 1);
+          pathCtx.lineTo(x + 1, y + 1);
+        }
+        if (!leftFilled) {
+          pathCtx.moveTo(x, y);
+          pathCtx.lineTo(x, y + 1);
+        }
+        if (!rightFilled) {
+          pathCtx.moveTo(x + 1, y);
+          pathCtx.lineTo(x + 1, y + 1);
         }
       }
     }
-    ctx.overlay.stroke();
-    ctx.overlay.restore();
   }
 
   function drawPreviewShape(previewState) {
@@ -3538,29 +3624,25 @@
 
   function drawLassoPreview(points) {
     if (!points || points.length < 2) return;
-    ctx.overlay.save();
-    ctx.overlay.strokeStyle = 'rgba(88,196,255,0.8)';
-    ctx.overlay.setLineDash([2, 1]);
-    ctx.overlay.lineWidth = 0.5;
-    ctx.overlay.beginPath();
-    ctx.overlay.moveTo(points[0].x + 0.5, points[0].y + 0.5);
-    for (let i = 1; i < points.length; i += 1) {
-      ctx.overlay.lineTo(points[i].x + 0.5, points[i].y + 0.5);
-    }
-    ctx.overlay.stroke();
-    ctx.overlay.restore();
+    strokeSelectionPath(pathCtx => {
+      pathCtx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i += 1) {
+        const point = points[i];
+        pathCtx.lineTo(point.x, point.y);
+      }
+      pathCtx.closePath();
+    }, { translateHalf: true });
   }
 
   function drawRectanglePreview(start, end) {
-    ctx.overlay.save();
-    ctx.overlay.strokeStyle = 'rgba(88,196,255,0.8)';
-    ctx.overlay.setLineDash([2, 1]);
+    if (!start || !end) return;
     const x = Math.min(start.x, end.x);
     const y = Math.min(start.y, end.y);
     const w = Math.abs(end.x - start.x) + 1;
     const h = Math.abs(end.y - start.y) + 1;
-    ctx.overlay.strokeRect(x, y, w, h);
-    ctx.overlay.restore();
+    strokeSelectionPath(pathCtx => {
+      pathCtx.rect(x, y, w, h);
+    }, { translateHalf: true });
   }
 
   function blendColors(target, source, opacity) {
