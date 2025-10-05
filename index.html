@@ -292,6 +292,7 @@
             <span>ガイド</span>
             <label><input type="checkbox" id="togglePixelPreview" checked /> 1px ガイド</label>
           </div>
+          <button type="button" class="button" id="newProject">新規作成</button>
           <button type="button" class="button" id="openDocument">ファイルを開く</button>
           <button type="button" class="button" id="clearCanvas">キャンバスをクリア</button>
           <button type="button" class="button" id="enableAutosave">ローカルに自動保存</button>
@@ -299,6 +300,35 @@
         </div>
       </section>
     </div>
+
+    <dialog class="modal" id="newProjectDialog" aria-labelledby="newProjectTitle">
+      <form class="modal__form" id="newProjectForm" method="dialog">
+        <header class="modal__header">
+          <h2 class="modal__title" id="newProjectTitle">新規プロジェクト</h2>
+        </header>
+        <div class="modal__body">
+          <label class="field">
+            <span>ファイル名</span>
+            <input type="text" id="newProjectName" required maxlength="120" />
+          </label>
+          <div class="field field--inline">
+            <span>キャンバスサイズ</span>
+            <label class="field field--tiny">
+              <span>横</span>
+              <input type="number" id="newProjectWidth" min="1" max="256" required />
+            </label>
+            <label class="field field--tiny">
+              <span>縦</span>
+              <input type="number" id="newProjectHeight" min="1" max="256" required />
+            </label>
+          </div>
+        </div>
+        <footer class="modal__footer">
+          <button type="button" class="button button--ghost" id="cancelNewProject">キャンセル</button>
+          <button type="submit" class="button button--primary" id="confirmNewProject">作成</button>
+        </footer>
+      </form>
+    </dialog>
 
     <script src="assets/js/app.js" defer></script>
     <script src="assets/js/pwa.js" defer></script>
