@@ -166,6 +166,9 @@
   }
   let hoverPixel = null;
   let overlayNeedsRedraw = true;
+  const SELECTION_DASH_SPEED = 40;
+  let selectionDashScreenOffset = 0;
+  let lastSelectionDashTime = 0;
   const history = { past: [], future: [], pending: null, limit: 50 };
   const fillPreviewCache = { key: null, pixels: null };
   const HISTORY_DRAW_TOOLS = new Set(['pen', 'eraser', 'line', 'curve', 'rect', 'rectFill', 'ellipse', 'ellipseFill', 'fill']);
@@ -262,6 +265,8 @@
       path: [],
       preview: null,
       selectionPreview: null,
+      selectionMove: null,
+      selectionClearedOnDown: false,
       startClient: null,
       panOrigin: { x: 0, y: 0 },
       curveHandle: null,
@@ -2607,17 +2612,13 @@
 
   function resizeCanvases() {
     const { width, height, scale } = state;
-    if (dom.canvases.drawing) {
-      dom.canvases.drawing.width = width;
-      dom.canvases.drawing.height = height;
-    }
-    if (dom.canvases.overlay) {
-      dom.canvases.overlay.width = width;
-      dom.canvases.overlay.height = height;
-    }
+    dom.canvases.drawing.width = width;
+    dom.canvases.drawing.height = height;
+    dom.canvases.overlay.width = width;
+    dom.canvases.overlay.height = height;
     if (dom.canvases.selection) {
-      dom.canvases.selection.width = width;
-      dom.canvases.selection.height = height;
+      dom.canvases.selection.width = width * scale;
+      dom.canvases.selection.height = height * scale;
     }
     if (ctx.drawing) {
       ctx.drawing.imageSmoothingEnabled = false;
@@ -2628,14 +2629,10 @@
     if (ctx.selection) {
       ctx.selection.imageSmoothingEnabled = false;
     }
-    if (dom.canvases.drawing) {
-      dom.canvases.drawing.style.width = `${width * scale}px`;
-      dom.canvases.drawing.style.height = `${height * scale}px`;
-    }
-    if (dom.canvases.overlay) {
-      dom.canvases.overlay.style.width = `${width * scale}px`;
-      dom.canvases.overlay.style.height = `${height * scale}px`;
-    }
+    dom.canvases.drawing.style.width = `${width * scale}px`;
+    dom.canvases.drawing.style.height = `${height * scale}px`;
+    dom.canvases.overlay.style.width = `${width * scale}px`;
+    dom.canvases.overlay.style.height = `${height * scale}px`;
     if (dom.canvases.selection) {
       dom.canvases.selection.style.width = `${width * scale}px`;
       dom.canvases.selection.style.height = `${height * scale}px`;
@@ -2705,6 +2702,25 @@
     if (!position) {
       pointerState.active = false;
       return;
+    }
+
+    pointerState.selectionClearedOnDown = false;
+    pointerState.selectionMove = null;
+
+    const selectionMask = state.selectionMask;
+    const isSelectionTool = activeTool === 'selectRect' || activeTool === 'selectLasso' || activeTool === 'selectSame';
+    if (isSelectionTool && selectionMask) {
+      const maskIndex = position.y * state.width + position.x;
+      const insideSelection = selectionMask[maskIndex] === 1;
+      if (!insideSelection) {
+        clearSelection();
+        pointerState.selectionClearedOnDown = true;
+      } else if (activeTool !== 'selectSame') {
+        const moved = beginSelectionMove(event, position);
+        if (moved) {
+          return;
+        }
+      }
     }
 
     if (activeTool === 'curve') {
@@ -2795,6 +2811,8 @@
     } else if (pointerState.tool === 'line' || pointerState.tool === 'rect' || pointerState.tool === 'rectFill' || pointerState.tool === 'ellipse' || pointerState.tool === 'ellipseFill') {
       pointerState.preview = { start: pointerState.start, end: position, points: pointerState.path.slice() };
       requestOverlayRender();
+    } else if (pointerState.tool === 'selectionMove') {
+      handleSelectionMoveDrag(position);
     } else if (pointerState.tool === 'selectRect' || pointerState.tool === 'selectLasso') {
       pointerState.selectionPreview.points.push(position);
       pointerState.selectionPreview.end = position;
@@ -2836,10 +2854,17 @@
       drawEllipse(pointerState.start, pointerState.current, false);
     } else if (tool === 'ellipseFill') {
       drawEllipse(pointerState.start, pointerState.current, true);
+    } else if (tool === 'selectionMove') {
+      finalizeSelectionMove();
     } else if (tool === 'selectRect') {
-      createSelectionRect(pointerState.start, pointerState.current);
+      if (!(pointerState.selectionClearedOnDown && pointerState.path.length <= 1)) {
+        createSelectionRect(pointerState.start, pointerState.current);
+      }
     } else if (tool === 'selectLasso') {
-      createSelectionLasso(pointerState.selectionPreview.points);
+      const pointCount = pointerState.selectionPreview?.points?.length || 0;
+      if (!(pointerState.selectionClearedOnDown && pointCount <= 1)) {
+        createSelectionLasso(pointerState.selectionPreview.points);
+      }
     }
 
     if (HISTORY_DRAW_TOOLS.has(tool)) {
@@ -2849,8 +2874,328 @@
     pointerState.pointerId = null;
     pointerState.preview = null;
     pointerState.selectionPreview = null;
+    pointerState.selectionMove = null;
+    pointerState.selectionClearedOnDown = false;
     pointerState.path = [];
     requestOverlayRender();
+  }
+
+  function beginSelectionMove(event, startPosition) {
+    const mask = state.selectionMask;
+    const bounds = state.selectionBounds;
+    const layer = getActiveLayer();
+    if (!mask || !bounds || !layer) {
+      return false;
+    }
+    const moveState = createSelectionMoveState(layer, bounds, mask);
+    if (!moveState) {
+      return false;
+    }
+
+    dom.canvases.drawing.setPointerCapture(event.pointerId);
+    hoverPixel = null;
+    requestOverlayRender();
+    pointerState.active = true;
+    pointerState.pointerId = event.pointerId;
+    pointerState.tool = 'selectionMove';
+    pointerState.start = startPosition;
+    pointerState.current = startPosition;
+    pointerState.last = startPosition;
+    pointerState.path = startPosition ? [startPosition] : [];
+    pointerState.preview = null;
+    pointerState.selectionPreview = null;
+    pointerState.selectionMove = moveState;
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return true;
+  }
+
+  function createSelectionMoveState(layer, bounds, mask) {
+    if (!layer || !bounds || !mask) {
+      return null;
+    }
+    const width = Math.max(0, (bounds.x1 ?? 0) - (bounds.x0 ?? 0) + 1);
+    const height = Math.max(0, (bounds.y1 ?? 0) - (bounds.y0 ?? 0) + 1);
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+
+    const size = width * height;
+    const localMask = new Uint8Array(size);
+    const localIndices = new Int16Array(size);
+    const localDirect = new Uint8ClampedArray(size * 4);
+    let imageData = null;
+    if (ctx.overlay && typeof ctx.overlay.createImageData === 'function') {
+      imageData = ctx.overlay.createImageData(width, height);
+    } else if (typeof ImageData === 'function') {
+      imageData = new ImageData(width, height);
+    }
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const canvasX = bounds.x0 + x;
+        const canvasY = bounds.y0 + y;
+        if (canvasX < 0 || canvasY < 0 || canvasX >= state.width || canvasY >= state.height) {
+          continue;
+        }
+        const canvasIndex = canvasY * state.width + canvasX;
+        const localIndex = y * width + x;
+        const selected = mask[canvasIndex] === 1 ? 1 : 0;
+        localMask[localIndex] = selected;
+        const canvasBase = canvasIndex * 4;
+        const localBase = localIndex * 4;
+        if (selected) {
+          localIndices[localIndex] = layer.indices[canvasIndex];
+          localDirect[localBase] = layer.direct[canvasBase];
+          localDirect[localBase + 1] = layer.direct[canvasBase + 1];
+          localDirect[localBase + 2] = layer.direct[canvasBase + 2];
+          localDirect[localBase + 3] = layer.direct[canvasBase + 3];
+          if (imageData) {
+            const paletteIndex = layer.indices[canvasIndex];
+            let color = null;
+            if (paletteIndex >= 0 && state.palette[paletteIndex]) {
+              color = state.palette[paletteIndex];
+            } else {
+              color = {
+                r: layer.direct[canvasBase],
+                g: layer.direct[canvasBase + 1],
+                b: layer.direct[canvasBase + 2],
+                a: layer.direct[canvasBase + 3],
+              };
+            }
+            if (color) {
+              imageData.data[localBase] = color.r;
+              imageData.data[localBase + 1] = color.g;
+              imageData.data[localBase + 2] = color.b;
+              imageData.data[localBase + 3] = color.a;
+            }
+          }
+        } else {
+          localIndices[localIndex] = -1;
+          if (imageData) {
+            imageData.data[localBase] = 0;
+            imageData.data[localBase + 1] = 0;
+            imageData.data[localBase + 2] = 0;
+            imageData.data[localBase + 3] = 0;
+          }
+        }
+      }
+    }
+
+    return {
+      layer,
+      bounds: { ...bounds },
+      width,
+      height,
+      mask: localMask,
+      indices: localIndices,
+      direct: localDirect,
+      imageData,
+      offset: { x: 0, y: 0 },
+      hasCleared: false,
+    };
+  }
+
+  function handleSelectionMoveDrag(position) {
+    const moveState = pointerState.selectionMove;
+    if (!moveState) {
+      return;
+    }
+    const start = pointerState.start || position;
+    const offsetX = position.x - start.x;
+    const offsetY = position.y - start.y;
+    if (!moveState.hasCleared && (offsetX !== 0 || offsetY !== 0)) {
+      beginHistory('selectionMove');
+      clearSelectionSourcePixels(moveState);
+    }
+    if (moveState.offset.x === offsetX && moveState.offset.y === offsetY && moveState.hasCleared) {
+      return;
+    }
+    moveState.offset.x = offsetX;
+    moveState.offset.y = offsetY;
+    if (moveState.hasCleared) {
+      requestOverlayRender();
+    }
+  }
+
+  function clearSelectionSourcePixels(moveState) {
+    const { layer, bounds, mask, width, height } = moveState;
+    if (!layer) {
+      return;
+    }
+    let modified = false;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const localIndex = y * width + x;
+        if (mask[localIndex] !== 1) continue;
+        const canvasX = bounds.x0 + x;
+        const canvasY = bounds.y0 + y;
+        if (canvasX < 0 || canvasY < 0 || canvasX >= state.width || canvasY >= state.height) continue;
+        const canvasIndex = canvasY * state.width + canvasX;
+        const base = canvasIndex * 4;
+        if (layer.indices[canvasIndex] !== -1 || layer.direct[base + 3] !== 0) {
+          modified = true;
+        }
+        layer.indices[canvasIndex] = -1;
+        layer.direct[base] = 0;
+        layer.direct[base + 1] = 0;
+        layer.direct[base + 2] = 0;
+        layer.direct[base + 3] = 0;
+      }
+    }
+    if (modified) {
+      markHistoryDirty();
+    }
+    moveState.hasCleared = true;
+    requestRender();
+  }
+
+  function finalizeSelectionMove() {
+    const moveState = pointerState.selectionMove;
+    if (!moveState) {
+      pointerState.tool = state.tool;
+      return;
+    }
+    if (!moveState.hasCleared) {
+      pointerState.tool = state.tool;
+      pointerState.selectionMove = null;
+      return;
+    }
+
+    const { offset } = moveState;
+    const result = placeSelectionPixels(moveState, offset.x, offset.y);
+    pointerState.selectionMove = null;
+    pointerState.tool = state.tool;
+
+    if (result.placed) {
+      state.selectionMask = result.mask;
+      state.selectionBounds = result.bounds;
+    } else {
+      clearSelection();
+    }
+
+    markHistoryDirty();
+    requestRender();
+    requestOverlayRender();
+    commitHistory();
+  }
+
+  function placeSelectionPixels(moveState, offsetX, offsetY) {
+    const { layer, bounds, mask, indices, direct, width, height } = moveState;
+    const newMask = new Uint8Array(state.width * state.height);
+    const newBounds = { x0: state.width, y0: state.height, x1: -1, y1: -1 };
+    let placed = false;
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const localIndex = y * width + x;
+        if (mask[localIndex] !== 1) continue;
+        const targetX = bounds.x0 + x + offsetX;
+        const targetY = bounds.y0 + y + offsetY;
+        if (targetX < 0 || targetY < 0 || targetX >= state.width || targetY >= state.height) {
+          continue;
+        }
+        const targetIndex = targetY * state.width + targetX;
+        const targetBase = targetIndex * 4;
+        const localBase = localIndex * 4;
+        layer.indices[targetIndex] = indices[localIndex];
+        layer.direct[targetBase] = direct[localBase];
+        layer.direct[targetBase + 1] = direct[localBase + 1];
+        layer.direct[targetBase + 2] = direct[localBase + 2];
+        layer.direct[targetBase + 3] = direct[localBase + 3];
+        newMask[targetIndex] = 1;
+        if (!placed) placed = true;
+        if (targetX < newBounds.x0) newBounds.x0 = targetX;
+        if (targetY < newBounds.y0) newBounds.y0 = targetY;
+        if (targetX > newBounds.x1) newBounds.x1 = targetX;
+        if (targetY > newBounds.y1) newBounds.y1 = targetY;
+      }
+    }
+
+    if (!placed) {
+      return { placed: false, mask: null, bounds: null };
+    }
+
+    return { placed: true, mask: newMask, bounds: newBounds };
+  }
+
+  function drawSelectionMovePreview(moveState) {
+    if (!moveState || !moveState.hasCleared) {
+      return;
+    }
+    const originX = moveState.bounds.x0 + moveState.offset.x;
+    const originY = moveState.bounds.y0 + moveState.offset.y;
+
+    if (ctx.overlay && moveState.imageData) {
+      ctx.overlay.putImageData(moveState.imageData, originX, originY);
+    }
+
+    if (!ctx.selection) {
+      return;
+    }
+
+    strokeSelectionPath((pathCtx, scale) => {
+      traceSelectionMoveOutline(pathCtx, moveState, originX, originY, scale);
+    }, { translateHalf: true });
+  }
+
+  function traceSelectionMoveOutline(pathCtx, moveState, originX, originY, scale) {
+    const { width, height, mask } = moveState;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const localIndex = y * width + x;
+        if (mask[localIndex] !== 1) continue;
+        const globalX = originX + x;
+        const globalY = originY + y;
+        if (globalX < 0 || globalY < 0 || globalX >= state.width || globalY >= state.height) {
+          continue;
+        }
+
+        const topFilled = selectionMoveNeighborFilled(moveState, x, y - 1, originX, originY);
+        const bottomFilled = selectionMoveNeighborFilled(moveState, x, y + 1, originX, originY);
+        const leftFilled = selectionMoveNeighborFilled(moveState, x - 1, y, originX, originY);
+        const rightFilled = selectionMoveNeighborFilled(moveState, x + 1, y, originX, originY);
+
+        const sx = globalX * scale;
+        const sy = globalY * scale;
+        const ex = sx + scale;
+        const ey = sy + scale;
+
+        if (!topFilled) {
+          pathCtx.moveTo(sx, sy);
+          pathCtx.lineTo(ex, sy);
+        }
+        if (!bottomFilled) {
+          pathCtx.moveTo(sx, ey);
+          pathCtx.lineTo(ex, ey);
+        }
+        if (!leftFilled) {
+          pathCtx.moveTo(sx, sy);
+          pathCtx.lineTo(sx, ey);
+        }
+        if (!rightFilled) {
+          pathCtx.moveTo(ex, sy);
+          pathCtx.lineTo(ex, ey);
+        }
+      }
+    }
+  }
+
+  function selectionMoveNeighborFilled(moveState, localX, localY, originX, originY) {
+    if (localX < 0 || localY < 0 || localX >= moveState.width || localY >= moveState.height) {
+      return false;
+    }
+    const localIndex = localY * moveState.width + localX;
+    if (moveState.mask[localIndex] !== 1) {
+      return false;
+    }
+    const globalX = originX + localX;
+    const globalY = originY + localY;
+    if (globalX < 0 || globalY < 0 || globalX >= state.width || globalY >= state.height) {
+      return false;
+    }
+    return true;
   }
 
   function getPointerPosition(event) {
@@ -3147,49 +3492,99 @@
   }
 
   function createSelectionRect(start, end) {
+    const layer = getActiveLayer();
+    if (!layer) {
+      clearSelection();
+      return;
+    }
     const x0 = clamp(Math.min(start.x, end.x), 0, state.width - 1);
     const x1 = clamp(Math.max(start.x, end.x), 0, state.width - 1);
     const y0 = clamp(Math.min(start.y, end.y), 0, state.height - 1);
     const y1 = clamp(Math.max(start.y, end.y), 0, state.height - 1);
     const mask = new Uint8Array(state.width * state.height);
+    const bounds = { x0: state.width, y0: state.height, x1: -1, y1: -1 };
+
     for (let y = y0; y <= y1; y += 1) {
       for (let x = x0; x <= x1; x += 1) {
-        mask[y * state.width + x] = 1;
+        if (!layerHasDrawablePixel(layer, x, y)) continue;
+        const idx = y * state.width + x;
+        mask[idx] = 1;
+        if (x < bounds.x0) bounds.x0 = x;
+        if (y < bounds.y0) bounds.y0 = y;
+        if (x > bounds.x1) bounds.x1 = x;
+        if (y > bounds.y1) bounds.y1 = y;
       }
     }
+
+    if (bounds.x0 > bounds.x1 || bounds.y0 > bounds.y1) {
+      clearSelection();
+      return;
+    }
+
     state.selectionMask = mask;
-    state.selectionBounds = { x0, y0, x1, y1 };
+    state.selectionBounds = bounds;
+    requestOverlayRender();
   }
 
   function createSelectionLasso(points) {
     if (!points || points.length < 3) return;
+    const layer = getActiveLayer();
+    if (!layer) {
+      clearSelection();
+      return;
+    }
     const mask = new Uint8Array(state.width * state.height);
-    const bounds = {
+    const searchBounds = {
       x0: state.width,
       y0: state.height,
       x1: 0,
       y1: 0,
     };
     for (const point of points) {
-      bounds.x0 = Math.min(bounds.x0, point.x);
-      bounds.y0 = Math.min(bounds.y0, point.y);
-      bounds.x1 = Math.max(bounds.x1, point.x);
-      bounds.y1 = Math.max(bounds.y1, point.y);
+      searchBounds.x0 = Math.min(searchBounds.x0, point.x);
+      searchBounds.y0 = Math.min(searchBounds.y0, point.y);
+      searchBounds.x1 = Math.max(searchBounds.x1, point.x);
+      searchBounds.y1 = Math.max(searchBounds.y1, point.y);
     }
-    bounds.x0 = clamp(bounds.x0, 0, state.width - 1);
-    bounds.y0 = clamp(bounds.y0, 0, state.height - 1);
-    bounds.x1 = clamp(bounds.x1, 0, state.width - 1);
-    bounds.y1 = clamp(bounds.y1, 0, state.height - 1);
+    searchBounds.x0 = clamp(searchBounds.x0, 0, state.width - 1);
+    searchBounds.y0 = clamp(searchBounds.y0, 0, state.height - 1);
+    searchBounds.x1 = clamp(searchBounds.x1, 0, state.width - 1);
+    searchBounds.y1 = clamp(searchBounds.y1, 0, state.height - 1);
 
-    for (let y = bounds.y0; y <= bounds.y1; y += 1) {
-      for (let x = bounds.x0; x <= bounds.x1; x += 1) {
-        if (pointInPolygon({ x, y }, points)) {
-          mask[y * state.width + x] = 1;
-        }
+    const selectedBounds = { x0: state.width, y0: state.height, x1: -1, y1: -1 };
+
+    for (let y = searchBounds.y0; y <= searchBounds.y1; y += 1) {
+      for (let x = searchBounds.x0; x <= searchBounds.x1; x += 1) {
+        if (!pointInPolygon({ x, y }, points)) continue;
+        if (!layerHasDrawablePixel(layer, x, y)) continue;
+        const idx = y * state.width + x;
+        mask[idx] = 1;
+        if (x < selectedBounds.x0) selectedBounds.x0 = x;
+        if (y < selectedBounds.y0) selectedBounds.y0 = y;
+        if (x > selectedBounds.x1) selectedBounds.x1 = x;
+        if (y > selectedBounds.y1) selectedBounds.y1 = y;
       }
     }
+
+    if (selectedBounds.x0 > selectedBounds.x1 || selectedBounds.y0 > selectedBounds.y1) {
+      clearSelection();
+      return;
+    }
+
     state.selectionMask = mask;
-    state.selectionBounds = bounds;
+    state.selectionBounds = selectedBounds;
+    requestOverlayRender();
+  }
+
+  function layerHasDrawablePixel(layer, x, y) {
+    if (!layer) return false;
+    if (x < 0 || y < 0 || x >= state.width || y >= state.height) return false;
+    const idx = y * state.width + x;
+    if (layer.indices[idx] >= 0) {
+      return true;
+    }
+    const base = idx * 4;
+    return layer.direct[base + 3] > 0;
   }
 
   function createSelectionByColor(x, y) {
@@ -3306,22 +3701,41 @@
 
   function requestOverlayRender() {
     overlayNeedsRedraw = true;
-    requestAnimationFrame(() => {
+    requestAnimationFrame(timestamp => {
       if (!overlayNeedsRedraw) return;
       overlayNeedsRedraw = false;
-      renderOverlay();
+      renderOverlay(timestamp);
     });
   }
 
-  function renderOverlay() {
+  function renderOverlay(timestamp) {
     const { width, height } = state;
+    const now = Number.isFinite(timestamp) ? timestamp : performance.now();
     if (ctx.overlay) {
       ctx.overlay.clearRect(0, 0, width, height);
     }
     if (ctx.selection) {
-      ctx.selection.clearRect(0, 0, width, height);
+      ensureSelectionCanvasResolution(Math.max(Number(state.scale) || 1, 1));
+      const selectionCanvas = dom.canvases.selection;
+      const clearWidth = selectionCanvas ? selectionCanvas.width : width * state.scale;
+      const clearHeight = selectionCanvas ? selectionCanvas.height : height * state.scale;
+      ctx.selection.clearRect(0, 0, clearWidth, clearHeight);
     }
-    if (state.selectionMask) {
+
+    const moveState = pointerState.selectionMove;
+    const hasSelectionPreview = Boolean(pointerState.selectionPreview
+      && (pointerState.tool === 'selectLasso' || pointerState.tool === 'selectRect'));
+    const hasSelectionOutline = Boolean(state.selectionMask)
+      || hasSelectionPreview
+      || Boolean(moveState && moveState.hasCleared);
+    if (hasSelectionOutline) {
+      updateSelectionDashAnimation(now);
+    } else {
+      resetSelectionDashAnimation();
+    }
+    if (moveState && moveState.hasCleared) {
+      drawSelectionMovePreview(moveState);
+    } else if (state.selectionMask) {
       drawSelectionOverlay();
     }
 
@@ -3360,6 +3774,10 @@
 
     if (pointerState.selectionPreview && pointerState.tool === 'selectRect') {
       drawRectanglePreview(pointerState.selectionPreview.start, pointerState.selectionPreview.end);
+    }
+
+    if (hasSelectionOutline) {
+      requestOverlayRender();
     }
   }
 
@@ -3468,21 +3886,65 @@
     const mask = state.selectionMask;
     if (!mask) return;
     const { width, height } = state;
-    strokeSelectionPath(pathCtx => {
-      traceSelectionOutline(pathCtx, mask, width, height);
+    strokeSelectionPath((pathCtx, scale) => {
+      traceSelectionOutline(pathCtx, mask, width, height, scale);
     }, { translateHalf: true });
+  }
+
+  function updateSelectionDashAnimation(timestamp) {
+    if (!Number.isFinite(timestamp)) {
+      timestamp = performance.now();
+    }
+    if (!lastSelectionDashTime) {
+      lastSelectionDashTime = timestamp;
+      return;
+    }
+    const delta = Math.max(0, timestamp - lastSelectionDashTime);
+    lastSelectionDashTime = timestamp;
+    if (delta === 0) return;
+    const advance = (delta / 1000) * SELECTION_DASH_SPEED;
+    selectionDashScreenOffset = (selectionDashScreenOffset + advance) % 1024;
+  }
+
+  function resetSelectionDashAnimation() {
+    selectionDashScreenOffset = 0;
+    lastSelectionDashTime = 0;
+  }
+
+  function ensureSelectionCanvasResolution(scale) {
+    const canvas = dom.canvases.selection;
+    if (!canvas) return;
+    const desiredWidth = state.width * scale;
+    const desiredHeight = state.height * scale;
+    if (canvas.width !== desiredWidth || canvas.height !== desiredHeight) {
+      canvas.width = desiredWidth;
+      canvas.height = desiredHeight;
+      if (ctx.selection) {
+        ctx.selection.imageSmoothingEnabled = false;
+      }
+    }
+    const cssWidth = `${desiredWidth}px`;
+    const cssHeight = `${desiredHeight}px`;
+    if (canvas.style.width !== cssWidth) {
+      canvas.style.width = cssWidth;
+    }
+    if (canvas.style.height !== cssHeight) {
+      canvas.style.height = cssHeight;
+    }
   }
 
   function strokeSelectionPath(trace, options = {}) {
     if (typeof trace !== 'function') return;
-    const targetCtx = ctx.selection || ctx.overlay;
+    const targetCtx = ctx.selection;
     if (!targetCtx || typeof targetCtx.setLineDash !== 'function') {
       return;
     }
     const scale = Math.max(Number(state.scale) || 1, 1);
-    const lineWidth = 1 / scale;
-    const dashLength = 1 / scale;
-    const dashPattern = [dashLength, dashLength];
+    ensureSelectionCanvasResolution(scale);
+    const lineWidth = 1;
+    const dashPattern = options.dashPattern || [4, 4];
+    const dashCycle = dashPattern.reduce((sum, value) => sum + value, 0) || 8;
+    const dashOffset = ((selectionDashScreenOffset) % dashCycle + dashCycle) % dashCycle;
 
     targetCtx.save();
     if (options.translateHalf) {
@@ -3494,21 +3956,21 @@
     targetCtx.lineCap = 'butt';
 
     targetCtx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
-    targetCtx.lineDashOffset = 0;
+    targetCtx.lineDashOffset = dashOffset;
     targetCtx.beginPath();
-    trace(targetCtx);
+    trace(targetCtx, scale);
     targetCtx.stroke();
 
     targetCtx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    targetCtx.lineDashOffset = dashLength;
+    targetCtx.lineDashOffset = (dashOffset + dashPattern[0]) % dashCycle;
     targetCtx.beginPath();
-    trace(targetCtx);
+    trace(targetCtx, scale);
     targetCtx.stroke();
 
     targetCtx.restore();
   }
 
-  function traceSelectionOutline(pathCtx, mask, width, height) {
+  function traceSelectionOutline(pathCtx, mask, width, height, scale) {
     for (let y = 0; y < height; y += 1) {
       const rowOffset = y * width;
       for (let x = 0; x < width; x += 1) {
@@ -3519,21 +3981,26 @@
         const leftFilled = x > 0 && mask[idx - 1] === 1;
         const rightFilled = x < width - 1 && mask[idx + 1] === 1;
 
+        const sx = x * scale;
+        const sy = y * scale;
+        const ex = sx + scale;
+        const ey = sy + scale;
+
         if (!topFilled) {
-          pathCtx.moveTo(x, y);
-          pathCtx.lineTo(x + 1, y);
+          pathCtx.moveTo(sx, sy);
+          pathCtx.lineTo(ex, sy);
         }
         if (!bottomFilled) {
-          pathCtx.moveTo(x, y + 1);
-          pathCtx.lineTo(x + 1, y + 1);
+          pathCtx.moveTo(sx, ey);
+          pathCtx.lineTo(ex, ey);
         }
         if (!leftFilled) {
-          pathCtx.moveTo(x, y);
-          pathCtx.lineTo(x, y + 1);
+          pathCtx.moveTo(sx, sy);
+          pathCtx.lineTo(sx, ey);
         }
         if (!rightFilled) {
-          pathCtx.moveTo(x + 1, y);
-          pathCtx.lineTo(x + 1, y + 1);
+          pathCtx.moveTo(ex, sy);
+          pathCtx.lineTo(ex, ey);
         }
       }
     }
@@ -3624,11 +4091,11 @@
 
   function drawLassoPreview(points) {
     if (!points || points.length < 2) return;
-    strokeSelectionPath(pathCtx => {
-      pathCtx.moveTo(points[0].x, points[0].y);
+    strokeSelectionPath((pathCtx, scale) => {
+      pathCtx.moveTo(points[0].x * scale, points[0].y * scale);
       for (let i = 1; i < points.length; i += 1) {
         const point = points[i];
-        pathCtx.lineTo(point.x, point.y);
+        pathCtx.lineTo(point.x * scale, point.y * scale);
       }
       pathCtx.closePath();
     }, { translateHalf: true });
@@ -3640,8 +4107,8 @@
     const y = Math.min(start.y, end.y);
     const w = Math.abs(end.x - start.x) + 1;
     const h = Math.abs(end.y - start.y) + 1;
-    strokeSelectionPath(pathCtx => {
-      pathCtx.rect(x, y, w, h);
+    strokeSelectionPath((pathCtx, scale) => {
+      pathCtx.rect(x * scale, y * scale, w * scale, h * scale);
     }, { translateHalf: true });
   }
 
