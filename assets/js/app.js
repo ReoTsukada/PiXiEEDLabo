@@ -123,6 +123,36 @@
     return acc;
   }, {});
 
+  const ZOOM_STEPS = Object.freeze([
+    0.3333333333333,
+    0.5,
+    0.75,
+    1,
+    1.25,
+    1.5,
+    2,
+    2.5,
+    3,
+    4.5,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    12,
+    14,
+    16,
+    18,
+    20,
+    25,
+    30,
+    35,
+    40,
+  ]);
+  const MIN_ZOOM_SCALE = ZOOM_STEPS[0];
+  const ZOOM_EPSILON = 1e-6;
+
   const DEFAULT_DOCUMENT_NAME = '新規ドキュメント';
   const MIN_CANVAS_SIZE = 1;
   const MAX_CANVAS_SIZE = 256;
@@ -186,7 +216,7 @@
   const SELECTION_DASH_SPEED = 40;
   let selectionDashScreenOffset = 0;
   let lastSelectionDashTime = 0;
-  const history = { past: [], future: [], pending: null, limit: 50 };
+  const history = { past: [], future: [], pending: null, limit: 30 };
   const fillPreviewCache = { key: null, pixels: null };
   const HISTORY_DRAW_TOOLS = new Set(['pen', 'eraser', 'line', 'curve', 'rect', 'rectFill', 'ellipse', 'ellipseFill', 'fill']);
   let toolButtons = [];
@@ -196,10 +226,12 @@
   let lastFrameTime = 0;
   let curveBuilder = null;
   let paletteWheelCtx = null;
+  let canvasWheelListenerBound = false;
   const paletteEditorState = {
     hsv: { h: 0, s: 0, v: 1, a: 255 },
     wheelPointer: { active: false, pointerId: null, upHandler: null },
   };
+  let dirtyRegion = null;
 
   function createInitialState(options = {}) {
     const {
@@ -222,7 +254,7 @@
     return {
       width,
       height,
-      scale: 8,
+      scale: normalizeZoomScale(8, 8),
       pan: { x: 0, y: 0 },
       tool: 'pen',
       brushSize: 1,
@@ -350,7 +382,7 @@
   function applyHistorySnapshot(snapshot) {
     state.width = snapshot.width;
     state.height = snapshot.height;
-    state.scale = snapshot.scale;
+    state.scale = normalizeZoomScale(snapshot.scale, state.scale || MIN_ZOOM_SCALE);
     state.pan = { x: snapshot.pan.x, y: snapshot.pan.y };
     state.tool = snapshot.tool;
     state.brushSize = snapshot.brushSize;
@@ -1059,7 +1091,7 @@
   function updateGridDecorations() {
     const stack = dom.canvases.stack;
     if (!stack) return;
-    const scale = Math.max(Number(state.scale) || 1, 1);
+    const scale = Math.max(Number(state.scale) || MIN_ZOOM_SCALE, MIN_ZOOM_SCALE);
     const tileScreenSize = 16 * scale;
     const minorStep = scale;
     const majorMultiplier = Math.max(Number(state.majorGridSpacing) || 16, 1);
@@ -1125,10 +1157,10 @@
       dom.controls.togglePixelPreview.checked = state.showPixelGuides;
     }
     if (dom.controls.zoomSlider) {
-      dom.controls.zoomSlider.value = String(state.scale);
+      dom.controls.zoomSlider.value = String(getZoomStepIndex(state.scale));
     }
     if (dom.controls.zoomLevel) {
-      dom.controls.zoomLevel.textContent = `${Math.round(state.scale * 100)}%`;
+      dom.controls.zoomLevel.textContent = formatZoomLabel(state.scale);
     }
     if (toolButtons.length) {
       setActiveTool(state.tool, toolButtons, { persist: false });
@@ -1723,10 +1755,6 @@
       height: snapshot.height,
       scale: snapshot.scale,
       pan: { ...snapshot.pan },
-      tool: snapshot.tool,
-      brushSize: snapshot.brushSize,
-      brushOpacity: snapshot.brushOpacity,
-      colorMode: snapshot.colorMode,
       palette,
       activePaletteIndex: snapshot.activePaletteIndex,
       activeRgb: normalizeColorValue(snapshot.activeRgb),
@@ -1743,23 +1771,14 @@
           direct: encodeTypedArray(layer.direct),
         })),
       })),
-      activeFrame: snapshot.activeFrame,
-      activeLayer: snapshot.activeLayer,
-      selectionMask: snapshot.selectionMask ? encodeTypedArray(snapshot.selectionMask) : null,
-      selectionBounds: snapshot.selectionBounds ? { ...snapshot.selectionBounds } : null,
       showGrid: snapshot.showGrid,
       showMajorGrid: snapshot.showMajorGrid,
       gridScreenStep: snapshot.gridScreenStep,
       majorGridSpacing: snapshot.majorGridSpacing,
       backgroundMode: snapshot.backgroundMode,
-      activeToolGroup: snapshot.activeToolGroup,
-      lastGroupTool: { ...(snapshot.lastGroupTool || DEFAULT_GROUP_TOOL) },
-      activeLeftTab: snapshot.activeLeftTab,
-      activeRightTab: snapshot.activeRightTab,
+      documentName: normalizeDocumentName(snapshot.documentName),
       showPixelGuides: snapshot.showPixelGuides,
       showChecker: snapshot.showChecker,
-      playback: { ...snapshot.playback },
-      documentName: normalizeDocumentName(snapshot.documentName),
     };
   }
 
@@ -1846,7 +1865,7 @@
     return {
       width,
       height,
-      scale: clamp(Math.round(Number(payload.scale) || state.scale || 1), 1, 40),
+      scale: normalizeZoomScale(payload.scale, state.scale || MIN_ZOOM_SCALE),
       pan: {
         x: Math.round(Number(payload.pan?.x) || 0),
         y: Math.round(Number(payload.pan?.y) || 0),
@@ -2175,13 +2194,20 @@
       scheduleSessionPersist();
     });
 
-    dom.controls.zoomOut?.addEventListener('click', () => setZoom(state.scale - 1));
-    dom.controls.zoomIn?.addEventListener('click', () => setZoom(state.scale + 1));
+    const zoomSlider = dom.controls.zoomSlider;
+    dom.controls.zoomOut?.addEventListener('click', () => adjustZoomBySteps(-1));
+    dom.controls.zoomIn?.addEventListener('click', () => adjustZoomBySteps(1));
 
-    dom.controls.zoomSlider?.addEventListener('input', event => {
-      const value = Number(event.target.value);
-      setZoom(value);
-    });
+    if (zoomSlider) {
+      zoomSlider.min = '0';
+      zoomSlider.max = String(ZOOM_STEPS.length - 1);
+      zoomSlider.step = '1';
+      zoomSlider.value = String(getZoomStepIndex(state.scale));
+      zoomSlider.addEventListener('input', event => {
+        const index = Number(event.target.value);
+        setZoom(getZoomScaleAtIndex(index));
+      });
+    }
 
     dom.controls.brushSize?.addEventListener('input', event => {
       state.brushSize = clamp(Math.round(Number(event.target.value)), 1, 32);
@@ -3043,6 +3069,19 @@
 
   function setupCanvas() {
     resizeCanvases();
+    ensureCanvasWheelListener();
+  }
+
+  function ensureCanvasWheelListener() {
+    if (canvasWheelListenerBound) {
+      return;
+    }
+    const stack = dom.canvases.stack;
+    if (!stack) {
+      return;
+    }
+    stack.addEventListener('wheel', handleCanvasWheel, { passive: false });
+    canvasWheelListenerBound = true;
   }
 
   function resizeCanvases() {
@@ -3074,20 +3113,102 @@
     }
     applyViewportTransform();
     syncControlsWithState();
+    markCanvasDirty();
     renderCanvas();
     requestOverlayRender();
   }
 
-  function setZoom(nextScale) {
-    const prevScale = state.scale;
-    const scale = clamp(Math.round(nextScale), 1, 40);
-    if (scale === prevScale) return;
-    const ratio = scale / prevScale;
-    state.scale = scale;
-    state.pan.x = Math.round((Number(state.pan.x) || 0) * ratio);
-    state.pan.y = Math.round((Number(state.pan.y) || 0) * ratio);
+  function setZoom(nextScale, focus) {
+    const prevScale = Number(state.scale) || MIN_ZOOM_SCALE;
+    const targetScale = normalizeZoomScale(nextScale, prevScale);
+    if (Math.abs(targetScale - prevScale) < ZOOM_EPSILON) {
+      syncControlsWithState();
+      return;
+    }
+
+    const previousPan = {
+      x: Number(state.pan.x) || 0,
+      y: Number(state.pan.y) || 0,
+    };
+    const stack = dom.canvases.stack;
+    const stackRectBefore = stack ? stack.getBoundingClientRect() : null;
+    const zoomFocus = focus && Number.isFinite(focus.worldX) && Number.isFinite(focus.worldY)
+      ? focus
+      : null;
+
+    state.scale = targetScale;
     resizeCanvases();
+
+    if (zoomFocus && stack && stackRectBefore) {
+      const stackRectAfter = stack.getBoundingClientRect();
+      const layoutShiftX = stackRectAfter.left - stackRectBefore.left;
+      const layoutShiftY = stackRectAfter.top - stackRectBefore.top;
+      const scaleDelta = prevScale - targetScale;
+      const nextPanX = previousPan.x + zoomFocus.worldX * scaleDelta - layoutShiftX;
+      const nextPanY = previousPan.y + zoomFocus.worldY * scaleDelta - layoutShiftY;
+      state.pan.x = Math.round(nextPanX);
+      state.pan.y = Math.round(nextPanY);
+    } else {
+      const ratio = targetScale / prevScale;
+      state.pan.x = Math.round(previousPan.x * ratio);
+      state.pan.y = Math.round(previousPan.y * ratio);
+    }
+
+    applyViewportTransform();
     scheduleSessionPersist();
+  }
+
+  function adjustZoomBySteps(delta, focus) {
+    const currentIndex = getZoomStepIndex(state.scale);
+    const nextIndex = clamp(currentIndex + Math.round(delta || 0), 0, ZOOM_STEPS.length - 1);
+    if (nextIndex === currentIndex) {
+      syncControlsWithState();
+      return;
+    }
+    setZoom(getZoomScaleAtIndex(nextIndex), focus);
+  }
+
+  function getCanvasFocusAt(clientX, clientY) {
+    const drawing = dom.canvases.drawing;
+    if (!drawing) {
+      return null;
+    }
+    const rect = drawing.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      return null;
+    }
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+      return null;
+    }
+    const scale = Number(state.scale) || MIN_ZOOM_SCALE;
+    const worldX = (clientX - rect.left) / scale;
+    const worldY = (clientY - rect.top) / scale;
+    return {
+      clientX,
+      clientY,
+      worldX,
+      worldY,
+      cellX: Math.floor(worldX),
+      cellY: Math.floor(worldY),
+    };
+  }
+
+  function handleCanvasWheel(event) {
+    const focus = getCanvasFocusAt(event.clientX, event.clientY);
+    if (!focus) {
+      return;
+    }
+    const deltaY = event.deltaY;
+    if (!Number.isFinite(deltaY) || deltaY === 0) {
+      return;
+    }
+    event.preventDefault();
+    const normalizer = event.deltaMode === 0 ? 100 : 3;
+    const stepMagnitude = clamp(Math.ceil(Math.abs(deltaY) / normalizer), 1, 4);
+    const direction = deltaY < 0 ? 1 : -1;
+    focus.cellX = clamp(focus.cellX, 0, state.width - 1);
+    focus.cellY = clamp(focus.cellY, 0, state.height - 1);
+    adjustZoomBySteps(direction * stepMagnitude, focus);
   }
 
   function setupKeyboard() {
@@ -3481,6 +3602,7 @@
     }
     if (modified) {
       markHistoryDirty();
+      markDirtyRect(bounds.x0, bounds.y0, bounds.x1, bounds.y1);
     }
     moveState.hasCleared = true;
     requestRender();
@@ -3504,6 +3626,9 @@
     pointerState.tool = state.tool;
 
     if (result.placed) {
+      if (result.bounds) {
+        markDirtyRect(result.bounds.x0, result.bounds.y0, result.bounds.x1, result.bounds.y1);
+      }
       state.selectionMask = result.mask;
       state.selectionBounds = result.bounds;
     } else {
@@ -3665,6 +3790,7 @@
       layer.direct[base + 2] = 0;
       layer.direct[base + 3] = 0;
       markHistoryDirty();
+      markDirtyPixel(x, y);
       return;
     }
 
@@ -3678,6 +3804,7 @@
       layer.direct[base + 2] = 0;
       layer.direct[base + 3] = 0;
       markHistoryDirty();
+      markDirtyPixel(x, y);
     } else {
       const target = {
         r: layer.direct[base],
@@ -3695,6 +3822,7 @@
       layer.direct[base + 2] = blended.b;
       layer.direct[base + 3] = blended.a;
       markHistoryDirty();
+      markDirtyPixel(x, y);
     }
   }
 
@@ -4077,7 +4205,66 @@
     requestRender();
   }
 
+  function markDirtyRect(x0, y0, x1, y1) {
+    const width = state.width;
+    const height = state.height;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    const left = clamp(Math.floor(Math.min(x0, x1)), 0, width - 1);
+    const right = clamp(Math.floor(Math.max(x0, x1)), 0, width - 1);
+    const top = clamp(Math.floor(Math.min(y0, y1)), 0, height - 1);
+    const bottom = clamp(Math.floor(Math.max(y0, y1)), 0, height - 1);
+    if (right < left || bottom < top) {
+      return;
+    }
+    if (!dirtyRegion) {
+      dirtyRegion = { x0: left, y0: top, x1: right, y1: bottom };
+      return;
+    }
+    if (left < dirtyRegion.x0) dirtyRegion.x0 = left;
+    if (top < dirtyRegion.y0) dirtyRegion.y0 = top;
+    if (right > dirtyRegion.x1) dirtyRegion.x1 = right;
+    if (bottom > dirtyRegion.y1) dirtyRegion.y1 = bottom;
+  }
+
+  function markDirtyPixel(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return;
+    }
+    const width = state.width;
+    const height = state.height;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    const px = clamp(Math.round(x), 0, width - 1);
+    const py = clamp(Math.round(y), 0, height - 1);
+    markDirtyRect(px, py, px, py);
+  }
+
+  function markCanvasDirty() {
+    const width = state.width;
+    const height = state.height;
+    if (width <= 0 || height <= 0) {
+      dirtyRegion = null;
+      return;
+    }
+    dirtyRegion = { x0: 0, y0: 0, x1: width - 1, y1: height - 1 };
+  }
+
+  function takeDirtyRegion() {
+    if (!dirtyRegion) {
+      return null;
+    }
+    const region = dirtyRegion;
+    dirtyRegion = null;
+    return region;
+  }
+
   function requestRender() {
+    if (!dirtyRegion) {
+      markCanvasDirty();
+    }
     if (renderScheduled) return;
     renderScheduled = true;
     requestAnimationFrame(() => {
@@ -4088,50 +4275,86 @@
   }
 
   function renderCanvas() {
+    if (!ctx.drawing) {
+      return;
+    }
     const { width, height } = state;
-    const image = ctx.drawing.createImageData(width, height);
+    if (width <= 0 || height <= 0) {
+      dirtyRegion = null;
+      return;
+    }
+    const pending = takeDirtyRegion();
+    if (!pending) {
+      return;
+    }
+    const x0 = clamp(pending.x0, 0, width - 1);
+    const y0 = clamp(pending.y0, 0, height - 1);
+    const x1 = clamp(pending.x1, 0, width - 1);
+    const y1 = clamp(pending.y1, 0, height - 1);
+    if (x1 < x0 || y1 < y0) {
+      return;
+    }
+    const regionWidth = x1 - x0 + 1;
+    const regionHeight = y1 - y0 + 1;
+    const image = ctx.drawing.createImageData(regionWidth, regionHeight);
     const data = image.data;
 
-    const layers = getActiveFrame().layers;
+    const layers = getActiveFrame()?.layers || [];
+    const palette = state.palette;
     for (let l = 0; l < layers.length; l += 1) {
       const layer = layers[l];
-      if (!layer.visible || layer.opacity <= 0) continue;
+      if (!layer || !layer.visible || layer.opacity <= 0) continue;
       const opacity = layer.opacity;
-      for (let i = 0; i < width * height; i += 1) {
-        let pixel;
-        const paletteIndex = layer.indices[i];
-        if (paletteIndex >= 0) {
-          pixel = state.palette[paletteIndex];
-        } else {
-          const base = i * 4;
-          const alpha = layer.direct[base + 3];
-          if (alpha === 0) continue;
-          pixel = {
-            r: layer.direct[base],
-            g: layer.direct[base + 1],
-            b: layer.direct[base + 2],
-            a: alpha,
-          };
+      const layerIndices = layer.indices;
+      const layerDirect = layer.direct;
+      for (let py = y0; py <= y1; py += 1) {
+        const rowOffset = (py - y0) * regionWidth * 4;
+        const layerRow = py * width;
+        for (let px = x0; px <= x1; px += 1) {
+          const pixelIndex = layerRow + px;
+          const paletteIndex = layerIndices[pixelIndex];
+          let srcR;
+          let srcG;
+          let srcB;
+          let srcA;
+          if (paletteIndex >= 0) {
+            const color = palette[paletteIndex];
+            if (!color) continue;
+            srcR = color.r;
+            srcG = color.g;
+            srcB = color.b;
+            srcA = color.a;
+          } else {
+            const directBase = pixelIndex * 4;
+            srcA = layerDirect[directBase + 3];
+            if (srcA === 0) continue;
+            srcR = layerDirect[directBase];
+            srcG = layerDirect[directBase + 1];
+            srcB = layerDirect[directBase + 2];
+          }
+          const alpha = (srcA / 255) * opacity;
+          if (alpha <= 0) continue;
+          const destIndex = rowOffset + (px - x0) * 4;
+          const dstA = data[destIndex + 3] / 255;
+          const outA = alpha + dstA * (1 - alpha);
+          if (outA <= 0) {
+            data[destIndex] = 0;
+            data[destIndex + 1] = 0;
+            data[destIndex + 2] = 0;
+            data[destIndex + 3] = 0;
+            continue;
+          }
+          const srcFactor = alpha / outA;
+          const dstFactor = (dstA * (1 - alpha)) / outA;
+          data[destIndex] = Math.round(srcR * srcFactor + data[destIndex] * dstFactor);
+          data[destIndex + 1] = Math.round(srcG * srcFactor + data[destIndex + 1] * dstFactor);
+          data[destIndex + 2] = Math.round(srcB * srcFactor + data[destIndex + 2] * dstFactor);
+          data[destIndex + 3] = Math.round(outA * 255);
         }
-        if (!pixel) continue;
-        const base = i * 4;
-        const srcA = (pixel.a / 255) * opacity;
-        if (srcA <= 0) continue;
-        const dstA = data[base + 3] / 255;
-        const outA = srcA + dstA * (1 - srcA);
-        const blend = outA > 0 ? (value, channel) => {
-          const src = pixel[channel];
-          const dst = data[base + (channel === 'r' ? 0 : channel === 'g' ? 1 : 2)];
-          return Math.round(((src * srcA) + dst * dstA * (1 - srcA)) / outA);
-        } : () => 0;
-        data[base] = blend(0, 'r');
-        data[base + 1] = blend(0, 'g');
-        data[base + 2] = blend(0, 'b');
-        data[base + 3] = Math.round(outA * 255);
       }
     }
 
-    ctx.drawing.putImageData(image, 0, 0);
+    ctx.drawing.putImageData(image, x0, y0);
   }
 
   function requestOverlayRender() {
@@ -4150,7 +4373,7 @@
       ctx.overlay.clearRect(0, 0, width, height);
     }
     if (ctx.selection) {
-      ensureSelectionCanvasResolution(Math.max(Number(state.scale) || 1, 1));
+      ensureSelectionCanvasResolution(Math.max(Number(state.scale) || MIN_ZOOM_SCALE, MIN_ZOOM_SCALE));
       const selectionCanvas = dom.canvases.selection;
       const clearWidth = selectionCanvas ? selectionCanvas.width : width * state.scale;
       const clearHeight = selectionCanvas ? selectionCanvas.height : height * state.scale;
@@ -4374,7 +4597,7 @@
     if (!targetCtx || typeof targetCtx.setLineDash !== 'function') {
       return;
     }
-    const scale = Math.max(Number(state.scale) || 1, 1);
+    const scale = Math.max(Number(state.scale) || MIN_ZOOM_SCALE, MIN_ZOOM_SCALE);
     ensureSelectionCanvasResolution(scale);
     const lineWidth = 1;
     const dashPattern = options.dashPattern || [4, 4];
@@ -4629,7 +4852,7 @@
     if (!canUseSessionStorage) return;
     try {
       const snapshot = {
-        scale: clamp(Math.round(state.scale || 1), 1, 40),
+        scale: normalizeZoomScale(state.scale, MIN_ZOOM_SCALE),
         pan: {
           x: Math.round(Number(state.pan?.x) || 0),
           y: Math.round(Number(state.pan?.y) || 0),
@@ -4675,7 +4898,7 @@
     }
 
     if (Number.isFinite(payload.scale)) {
-      state.scale = clamp(Math.round(payload.scale), 1, 40);
+      state.scale = normalizeZoomScale(payload.scale, state.scale || MIN_ZOOM_SCALE);
     }
     if (payload.pan && Number.isFinite(payload.pan.x) && Number.isFinite(payload.pan.y)) {
       state.pan.x = Math.round(payload.pan.x);
@@ -4860,6 +5083,42 @@
       return { r, g, b, a: 255 };
     }
     return null;
+  }
+
+  function getZoomStepIndex(scale) {
+    if (!Number.isFinite(scale)) {
+      return 0;
+    }
+    let bestIndex = 0;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < ZOOM_STEPS.length; i += 1) {
+      const diff = Math.abs(ZOOM_STEPS[i] - scale);
+      if (diff < bestDiff - ZOOM_EPSILON) {
+        bestDiff = diff;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  }
+
+  function getZoomScaleAtIndex(index) {
+    const numeric = Number(index);
+    const clampedIndex = Math.min(Math.max(Number.isFinite(numeric) ? Math.round(numeric) : 0, 0), ZOOM_STEPS.length - 1);
+    return ZOOM_STEPS[clampedIndex];
+  }
+
+  function normalizeZoomScale(value, fallback = MIN_ZOOM_SCALE) {
+    const base = Number.isFinite(value) ? Number(value) : Number(fallback);
+    const effective = Number.isFinite(base) ? base : MIN_ZOOM_SCALE;
+    return ZOOM_STEPS[getZoomStepIndex(effective)];
+  }
+
+  function formatZoomLabel(scale) {
+    const percent = normalizeZoomScale(scale, MIN_ZOOM_SCALE) * 100;
+    const roundedTenth = Math.round(percent * 10) / 10;
+    const isWhole = Math.abs(roundedTenth - Math.round(roundedTenth)) < 0.05;
+    const value = isWhole ? Math.round(roundedTenth) : Number(roundedTenth.toFixed(1));
+    return `${value}%`;
   }
 
   function clamp(value, min, max) {
