@@ -28,9 +28,6 @@
             <div class="canvas-controls">
               <button type="button" class="chip" id="undoAction" aria-label="元に戻す" disabled>↺</button>
               <button type="button" class="chip" id="redoAction" aria-label="やり直す" disabled>↻</button>
-              <button type="button" class="chip" id="toggleGrid" aria-pressed="true">グリッド</button>
-              <button type="button" class="chip" id="toggleMajorGrid" aria-pressed="false">メジャー</button>
-              <button type="button" class="chip" id="toggleBackgroundMode" aria-pressed="false">背景</button>
               <div class="zoom-control" role="group" aria-label="ズーム">
                 <button type="button" class="chip" id="zoomOut">−</button>
                 <span id="zoomLevel">100%</span>
@@ -288,19 +285,44 @@
             <span>ズーム</span>
             <input type="range" id="zoomSlider" min="1" max="40" value="8" />
           </label>
-          <div class="field field--inline">
-            <span>背景</span>
-            <label><input type="checkbox" id="toggleChecker" checked /> 16px グレーチェック</label>
-          </div>
-          <div class="field field--inline">
-            <span>ガイド</span>
-            <label><input type="checkbox" id="togglePixelPreview" checked /> 1px ガイド</label>
+          <div class="field field--list" role="group" aria-label="表示設定">
+            <ul class="toggle-list">
+              <li>
+                <label class="toggle-option" for="toggleGrid">
+                  <input type="checkbox" id="toggleGrid" checked />
+                  <span>グリッド</span>
+                </label>
+              </li>
+              <li>
+                <label class="toggle-option" for="toggleMajorGrid">
+                  <input type="checkbox" id="toggleMajorGrid" />
+                  <span>メジャー</span>
+                </label>
+              </li>
+              <li>
+                <label class="toggle-option" for="toggleChecker">
+                  <input type="checkbox" id="toggleChecker" checked />
+                  <span>16px グレーチェック</span>
+                </label>
+              </li>
+              <li>
+                <label class="toggle-option" for="togglePixelPreview">
+                  <input type="checkbox" id="togglePixelPreview" checked />
+                  <span>1px ガイド</span>
+                </label>
+              </li>
+            </ul>
+            <button type="button" class="chip" id="toggleBackgroundMode" aria-pressed="false">背景</button>
           </div>
           <button type="button" class="button" id="newProject">新規作成</button>
           <button type="button" class="button" id="openDocument">ファイルを開く</button>
           <button type="button" class="button" id="clearCanvas">キャンバスをクリア</button>
           <button type="button" class="button" id="enableAutosave">ローカルに自動保存</button>
           <p class="help-text" id="autosaveStatus" aria-live="polite"></p>
+          <div class="field memory-control" role="status" aria-live="polite">
+            <span id="memoryUsage">メモリ: 計測中…</span>
+            <button type="button" class="chip" id="memoryClear">メモリ削除</button>
+          </div>
         </div>
       </section>
     </div>
