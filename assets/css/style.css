@@ -518,6 +518,39 @@ button {
   gap: 12px;
 }
 
+.field--list {
+  gap: 16px;
+}
+
+.toggle-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toggle-option {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.84rem;
+  color: inherit;
+}
+
+.toggle-option input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.field--list > .chip {
+  align-self: flex-start;
+}
+
 .field--compact input {
   max-width: 120px;
 }
