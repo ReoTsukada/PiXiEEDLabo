@@ -220,6 +220,8 @@
   let selectionDashScreenOffset = 0;
   let lastSelectionDashTime = 0;
   const history = { past: [], future: [], pending: null, limit: 20 };
+  let historyTrimmedRecently = false;
+  let historyTrimmedAt = 0;
   const fillPreviewCache = { key: null, pixels: null };
   const HISTORY_DRAW_TOOLS = new Set(['pen', 'eraser', 'line', 'curve', 'rect', 'rectFill', 'ellipse', 'ellipseFill', 'fill']);
   const MEMORY_MONITOR_INTERVAL = 2000;
@@ -298,16 +300,33 @@
       visible: true,
       opacity: 1,
       indices: new Int16Array(size).fill(-1),
-      direct: new Uint8ClampedArray(size * 4),
+      direct: null,
     };
   }
 
+  function ensureLayerDirect(layer, width = state.width, height = state.height) {
+    const length = Math.max(0, Math.floor(width) || 0) * Math.max(0, Math.floor(height) || 0) * 4;
+    if (!(layer.direct instanceof Uint8ClampedArray) || layer.direct.length !== length) {
+      layer.direct = new Uint8ClampedArray(length);
+    }
+    return layer.direct;
+  }
+
   function cloneLayer(baseLayer, width, height) {
-    const layer = createLayer(baseLayer.name, width, height);
-    layer.visible = baseLayer.visible;
-    layer.opacity = baseLayer.opacity;
+    const size = width * height;
+    const layer = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `layer-${Math.random().toString(36).slice(2)}`,
+      name: baseLayer.name,
+      visible: baseLayer.visible,
+      opacity: baseLayer.opacity,
+      indices: new Int16Array(size),
+      direct: null,
+    };
     layer.indices.set(baseLayer.indices);
-    layer.direct.set(baseLayer.direct);
+    if (baseLayer.direct instanceof Uint8ClampedArray) {
+      const direct = ensureLayerDirect(layer, width, height);
+      direct.set(baseLayer.direct);
+    }
     return layer;
   }
 
@@ -352,15 +371,17 @@
         id: frame.id,
         name: frame.name,
         duration: frame.duration,
-        layers: frame.layers.map(layer => ({
-          id: layer.id,
-          name: layer.name,
-          visible: layer.visible,
-          opacity: layer.opacity,
-          indices: clonePixelData ? new Int16Array(layer.indices) : layer.indices,
-          direct: clonePixelData ? new Uint8ClampedArray(layer.direct) : layer.direct,
+          layers: frame.layers.map(layer => ({
+            id: layer.id,
+            name: layer.name,
+            visible: layer.visible,
+            opacity: layer.opacity,
+            indices: clonePixelData ? new Int16Array(layer.indices) : layer.indices,
+            direct: layer.direct instanceof Uint8ClampedArray
+              ? (clonePixelData ? new Uint8ClampedArray(layer.direct) : layer.direct)
+              : null,
+          })),
         })),
-      })),
       showGrid: state.showGrid,
       showMajorGrid: state.showMajorGrid,
       gridScreenStep: state.gridScreenStep,
@@ -397,16 +418,331 @@
     return snapshot;
   }
 
+  function encodeInt16Rle(view) {
+    const length = view.length;
+    if (length === 0) {
+      return { type: 'int16-rle', length: 0, values: new Int16Array(0), counts: new Uint32Array(0) };
+    }
+    const values = [];
+    const counts = [];
+    let current = view[0];
+    let count = 1;
+    for (let i = 1; i < length; i += 1) {
+      const value = view[i];
+      if (value === current) {
+        count += 1;
+      } else {
+        values.push(current);
+        counts.push(count);
+        current = value;
+        count = 1;
+      }
+    }
+    values.push(current);
+    counts.push(count);
+    const valueArray = new Int16Array(values.length);
+    for (let i = 0; i < values.length; i += 1) {
+      valueArray[i] = values[i];
+    }
+    const countArray = new Uint32Array(counts.length);
+    for (let i = 0; i < counts.length; i += 1) {
+      countArray[i] = counts[i];
+    }
+    return { type: 'int16-rle', length, values: valueArray, counts: countArray };
+  }
+
+  function decodeInt16Data(source) {
+    if (!source) {
+      return new Int16Array(0);
+    }
+    if (source instanceof Int16Array) {
+      return new Int16Array(source);
+    }
+    if (ArrayBuffer.isView(source) && source.BYTES_PER_ELEMENT === 2) {
+      return new Int16Array(source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength));
+    }
+    if (typeof source === 'object' && source.type === 'int16-rle') {
+      const { length, values, counts } = source;
+      const output = new Int16Array(length);
+      let offset = 0;
+      for (let i = 0; i < values.length; i += 1) {
+        const runValue = values[i];
+        const runLength = counts[i];
+        output.fill(runValue, offset, offset + runLength);
+        offset += runLength;
+      }
+      return output;
+    }
+    throw new Error('Unsupported Int16 encoding');
+  }
+
+  function encodeUint8Rle(view) {
+    const length = view.length;
+    if (length === 0) {
+      return { type: 'uint8-rle', length: 0, values: new Uint8Array(0), counts: new Uint32Array(0) };
+    }
+    const values = [];
+    const counts = [];
+    let current = view[0];
+    let count = 1;
+    for (let i = 1; i < length; i += 1) {
+      const value = view[i];
+      if (value === current) {
+        count += 1;
+      } else {
+        values.push(current);
+        counts.push(count);
+        current = value;
+        count = 1;
+      }
+    }
+    values.push(current);
+    counts.push(count);
+    const valueArray = new Uint8Array(values.length);
+    for (let i = 0; i < values.length; i += 1) {
+      valueArray[i] = values[i];
+    }
+    const countArray = new Uint32Array(counts.length);
+    for (let i = 0; i < counts.length; i += 1) {
+      countArray[i] = counts[i];
+    }
+    return { type: 'uint8-rle', length, values: valueArray, counts: countArray };
+  }
+
+  function decodeUint8Data(source, { clamped = false } = {}) {
+    if (!source) {
+      return clamped ? new Uint8ClampedArray(0) : new Uint8Array(0);
+    }
+    if (ArrayBuffer.isView(source) && source.BYTES_PER_ELEMENT === 1 && source.constructor !== Uint32Array) {
+      const buffer = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
+      return clamped ? new Uint8ClampedArray(buffer) : new Uint8Array(buffer);
+    }
+    if (typeof source === 'object' && source.type === 'uint8-rle') {
+      const { length, values, counts } = source;
+      const shouldClamp = Object.prototype.hasOwnProperty.call(source, 'clamped') ? Boolean(source.clamped) : clamped;
+      const output = shouldClamp ? new Uint8ClampedArray(length) : new Uint8Array(length);
+      let offset = 0;
+      for (let i = 0; i < values.length; i += 1) {
+        const runValue = values[i];
+        const runLength = counts[i];
+        output.fill(runValue, offset, offset + runLength);
+        offset += runLength;
+      }
+      return output;
+    }
+    throw new Error('Unsupported Uint8 encoding');
+  }
+
+  function compressInt16Array(view) {
+    if (!view) {
+      return new Int16Array(0);
+    }
+    if (!(view instanceof Int16Array)) {
+      view = new Int16Array(view);
+    }
+    const encoded = encodeInt16Rle(view);
+    const encodedBytes = encoded.values.byteLength + encoded.counts.byteLength;
+    if (encodedBytes >= view.byteLength) {
+      return view.slice();
+    }
+    return encoded;
+  }
+
+  function compressUint8Array(view, { clamped = false } = {}) {
+    if (!view) {
+      return clamped ? new Uint8ClampedArray(0) : new Uint8Array(0);
+    }
+    const source = clamped && view instanceof Uint8ClampedArray ? view : new Uint8Array(view);
+    const encoded = encodeUint8Rle(source);
+    const encodedBytes = encoded.values.byteLength + encoded.counts.byteLength;
+    const originalBytes = source.byteLength;
+    if (encodedBytes >= originalBytes) {
+      if (clamped) {
+        return view instanceof Uint8ClampedArray ? view.slice() : new Uint8ClampedArray(source);
+      }
+      return source.slice ? source.slice() : new Uint8Array(source);
+    }
+    return { ...encoded, clamped: Boolean(clamped) };
+  }
+
+  function estimateEncodedByteLength(data, elementSize) {
+    if (!data) return 0;
+    if (ArrayBuffer.isView(data)) {
+      return data.byteLength;
+    }
+    if (typeof data === 'object') {
+      if (data.type === 'int16-rle' || data.type === 'uint8-rle') {
+        const valuesBytes = data.values?.byteLength || 0;
+        const countsBytes = data.counts?.byteLength || 0;
+        return valuesBytes + countsBytes;
+      }
+      if (typeof data.length === 'number' && data.BYTES_PER_ELEMENT) {
+        return data.length * data.BYTES_PER_ELEMENT;
+      }
+    }
+    if (typeof data.length === 'number' && Number.isFinite(elementSize)) {
+      return data.length * elementSize;
+    }
+    if (typeof data === 'string') {
+      return data.length;
+    }
+    return 0;
+  }
+
+  function compressHistorySnapshot(snapshot) {
+    if (!snapshot) return snapshot;
+    const compressed = {
+      width: snapshot.width,
+      height: snapshot.height,
+      scale: snapshot.scale,
+      pan: { x: snapshot.pan.x, y: snapshot.pan.y },
+      palette: snapshot.palette.map(color => ({ ...color })),
+      activePaletteIndex: snapshot.activePaletteIndex,
+      activeRgb: { ...snapshot.activeRgb },
+      frames: snapshot.frames.map(frame => ({
+        id: frame.id,
+        name: frame.name,
+        duration: frame.duration,
+        layers: frame.layers.map(layer => ({
+          id: layer.id,
+          name: layer.name,
+          visible: layer.visible,
+          opacity: layer.opacity,
+          indices: compressInt16Array(layer.indices),
+          direct: layer.direct ? compressUint8Array(layer.direct, { clamped: true }) : null,
+        })),
+      })),
+      showGrid: snapshot.showGrid,
+      showMajorGrid: snapshot.showMajorGrid,
+      gridScreenStep: snapshot.gridScreenStep,
+      majorGridSpacing: snapshot.majorGridSpacing,
+      backgroundMode: snapshot.backgroundMode,
+      showPixelGuides: snapshot.showPixelGuides,
+      showChecker: snapshot.showChecker,
+      documentName: snapshot.documentName,
+    };
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeFrame')) {
+      compressed.activeFrame = snapshot.activeFrame;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeLayer')) {
+      compressed.activeLayer = snapshot.activeLayer;
+    }
+    if (snapshot.selectionMask) {
+      compressed.selectionMask = compressUint8Array(snapshot.selectionMask, { clamped: false });
+    }
+    if (snapshot.selectionBounds) {
+      compressed.selectionBounds = { ...snapshot.selectionBounds };
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'tool')) {
+      compressed.tool = snapshot.tool;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'brushSize')) {
+      compressed.brushSize = snapshot.brushSize;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'brushOpacity')) {
+      compressed.brushOpacity = snapshot.brushOpacity;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'colorMode')) {
+      compressed.colorMode = snapshot.colorMode;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeToolGroup')) {
+      compressed.activeToolGroup = snapshot.activeToolGroup;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'lastGroupTool')) {
+      compressed.lastGroupTool = { ...snapshot.lastGroupTool };
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeLeftTab')) {
+      compressed.activeLeftTab = snapshot.activeLeftTab;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeRightTab')) {
+      compressed.activeRightTab = snapshot.activeRightTab;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'playback')) {
+      compressed.playback = { ...snapshot.playback };
+    }
+    return compressed;
+  }
+
+  function decompressHistorySnapshot(snapshot) {
+    if (!snapshot) return snapshot;
+    const decompressed = {
+      width: snapshot.width,
+      height: snapshot.height,
+      scale: snapshot.scale,
+      pan: { x: snapshot.pan.x, y: snapshot.pan.y },
+      palette: snapshot.palette.map(color => ({ ...color })),
+      activePaletteIndex: snapshot.activePaletteIndex,
+      activeRgb: { ...snapshot.activeRgb },
+      frames: snapshot.frames.map(frame => ({
+        id: frame.id,
+        name: frame.name,
+        duration: frame.duration,
+        layers: frame.layers.map(layer => ({
+          id: layer.id,
+          name: layer.name,
+          visible: layer.visible,
+          opacity: layer.opacity,
+          indices: decodeInt16Data(layer.indices),
+          direct: layer.direct ? decodeUint8Data(layer.direct, { clamped: true }) : null,
+        })),
+      })),
+      showGrid: snapshot.showGrid,
+      showMajorGrid: snapshot.showMajorGrid,
+      gridScreenStep: snapshot.gridScreenStep,
+      majorGridSpacing: snapshot.majorGridSpacing,
+      backgroundMode: snapshot.backgroundMode,
+      showPixelGuides: snapshot.showPixelGuides,
+      showChecker: snapshot.showChecker,
+      documentName: snapshot.documentName,
+    };
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeFrame')) {
+      decompressed.activeFrame = snapshot.activeFrame;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeLayer')) {
+      decompressed.activeLayer = snapshot.activeLayer;
+    }
+    if (snapshot.selectionMask) {
+      decompressed.selectionMask = decodeUint8Data(snapshot.selectionMask, { clamped: false });
+    }
+    if (snapshot.selectionBounds) {
+      decompressed.selectionBounds = { ...snapshot.selectionBounds };
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'tool')) {
+      decompressed.tool = snapshot.tool;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'brushSize')) {
+      decompressed.brushSize = snapshot.brushSize;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'brushOpacity')) {
+      decompressed.brushOpacity = snapshot.brushOpacity;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'colorMode')) {
+      decompressed.colorMode = snapshot.colorMode;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeToolGroup')) {
+      decompressed.activeToolGroup = snapshot.activeToolGroup;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'lastGroupTool')) {
+      decompressed.lastGroupTool = { ...snapshot.lastGroupTool };
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeLeftTab')) {
+      decompressed.activeLeftTab = snapshot.activeLeftTab;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeRightTab')) {
+      decompressed.activeRightTab = snapshot.activeRightTab;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'playback')) {
+      decompressed.playback = { ...snapshot.playback };
+    }
+    return decompressed;
+  }
+
   function bytesForLayer(layer) {
     if (!layer) return 0;
     const indices = layer.indices;
     const direct = layer.direct;
-    const indicesBytes = indices && typeof indices.length === 'number' && indices.BYTES_PER_ELEMENT
-      ? indices.length * indices.BYTES_PER_ELEMENT
-      : (typeof indices === 'string' ? indices.length : 0);
-    const directBytes = direct && typeof direct.length === 'number' && direct.BYTES_PER_ELEMENT
-      ? direct.length * direct.BYTES_PER_ELEMENT
-      : (typeof direct === 'string' ? direct.length : 0);
+    const indicesBytes = estimateEncodedByteLength(indices, 2);
+    const directBytes = estimateEncodedByteLength(direct, 1);
     return indicesBytes + directBytes;
   }
 
@@ -436,11 +772,7 @@
       });
     }
     if (snapshot.selectionMask) {
-      if (typeof snapshot.selectionMask.length === 'number') {
-        total += snapshot.selectionMask.length;
-      } else if (typeof snapshot.selectionMask === 'string') {
-        total += snapshot.selectionMask.length;
-      }
+      total += estimateEncodedByteLength(snapshot.selectionMask, 1);
     }
     if (Array.isArray(snapshot.palette)) {
       total += snapshot.palette.length * 16;
@@ -487,6 +819,15 @@
       autosaveDirty = true;
       scheduleAutosaveSnapshot();
       usage = getMemoryUsageBreakdown();
+      history.limit = Math.max(5, Math.min(history.limit, Math.ceil(history.limit * 0.75)));
+      while (history.past.length > history.limit) {
+        history.past.shift();
+      }
+      while (history.future.length > history.limit) {
+        history.future.shift();
+      }
+      historyTrimmedRecently = true;
+      historyTrimmedAt = performance && typeof performance.now === 'function' ? performance.now() : Date.now();
     }
     return usage;
   }
@@ -525,6 +866,15 @@
       text += ` | 警告 ${formatBytes(memoryThresholds.warningBytes)} | 上限目安 ${formatBytes(memoryThresholds.maxBytes)}`;
     } else {
       text += ` | 警告 ${formatBytes(memoryThresholds.warningBytes)}`;
+    }
+    text += ` | ヒストリー ${history.past.length}/${history.limit}`;
+    const now = performance && typeof performance.now === 'function' ? performance.now() : Date.now();
+    if (historyTrimmedRecently) {
+      if (now - historyTrimmedAt <= 6000) {
+        text += ' | ヒストリー自動整理';
+      } else {
+        historyTrimmedRecently = false;
+      }
     }
     usageNode.textContent = text;
     usageNode.style.color = usage.total >= memoryThresholds.warningBytes ? '#ff5c5c' : '';
@@ -591,14 +941,22 @@
       id: frame.id,
       name: frame.name,
       duration: frame.duration,
-      layers: frame.layers.map(layer => ({
-        id: layer.id,
-        name: layer.name,
-        visible: layer.visible,
-        opacity: layer.opacity,
-        indices: new Int16Array(layer.indices),
-        direct: new Uint8ClampedArray(layer.direct),
-      })),
+      layers: frame.layers.map(layer => {
+        const clonedLayer = {
+          id: layer.id,
+          name: layer.name,
+          visible: layer.visible,
+          opacity: layer.opacity,
+          indices: new Int16Array(layer.indices),
+          direct: null,
+        };
+        if (layer.direct instanceof Uint8ClampedArray) {
+          clonedLayer.direct = new Uint8ClampedArray(layer.direct);
+        } else if (ArrayBuffer.isView(layer.direct)) {
+          clonedLayer.direct = new Uint8ClampedArray(layer.direct.buffer.slice(0));
+        }
+        return clonedLayer;
+      }),
     }));
     if (Object.prototype.hasOwnProperty.call(snapshot, 'activeFrame')) {
       state.activeFrame = snapshot.activeFrame;
@@ -698,7 +1056,7 @@
   function beginHistory(label) {
     if (history.pending) return;
     history.pending = {
-      before: makeHistorySnapshot(),
+      before: compressHistorySnapshot(makeHistorySnapshot()),
       dirty: false,
       label,
     };
@@ -736,13 +1094,13 @@
   function undo() {
     commitHistory();
     if (!history.past.length) return;
-    const snapshot = makeHistorySnapshot();
+    const snapshot = compressHistorySnapshot(makeHistorySnapshot());
     history.future.push(snapshot);
     if (history.future.length > history.limit) {
       history.future.shift();
     }
     const previous = history.past.pop();
-    applyHistorySnapshot(previous);
+    applyHistorySnapshot(decompressHistorySnapshot(previous));
     updateHistoryButtons();
     autosaveDirty = true;
     scheduleAutosaveSnapshot();
@@ -751,13 +1109,13 @@
   function redo() {
     commitHistory();
     if (!history.future.length) return;
-    const snapshot = makeHistorySnapshot();
+    const snapshot = compressHistorySnapshot(makeHistorySnapshot());
     history.past.push(snapshot);
     if (history.past.length > history.limit) {
       history.past.shift();
     }
     const next = history.future.pop();
-    applyHistorySnapshot(next);
+    applyHistorySnapshot(decompressHistorySnapshot(next));
     updateHistoryButtons();
     autosaveDirty = true;
     scheduleAutosaveSnapshot();
@@ -2031,19 +2389,25 @@
         throw new Error(`Frame ${frameIndex} has no layers`);
       }
       const layers = frame.layers.map((layer, layerIndex) => {
-        if (!layer || typeof layer.indices !== 'string' || typeof layer.direct !== 'string') {
-          throw new Error(`Layer ${layerIndex} is missing pixel data`);
+        if (!layer || typeof layer.indices !== 'string') {
+          throw new Error(`Layer ${layerIndex} is missing index data`);
         }
         const indicesBytes = decodeBase64(layer.indices);
-        const directBytes = decodeBase64(layer.direct);
-        if (indicesBytes.length !== pixelCount * 2 || directBytes.length !== pixelCount * 4) {
+        if (indicesBytes.length !== pixelCount * 2) {
           throw new Error('Layer pixel data mismatch');
         }
         const indicesView = new Int16Array(indicesBytes.buffer, indicesBytes.byteOffset, indicesBytes.byteLength / 2);
         const indices = new Int16Array(indicesView.length);
         indices.set(indicesView);
-        const direct = new Uint8ClampedArray(directBytes.length);
-        direct.set(directBytes);
+        let direct = null;
+        if (typeof layer.direct === 'string' && layer.direct.length > 0) {
+          const directBytes = decodeBase64(layer.direct);
+          if (directBytes.length !== pixelCount * 4) {
+            throw new Error('Layer direct pixel data mismatch');
+          }
+          direct = new Uint8ClampedArray(directBytes.length);
+          direct.set(directBytes);
+        }
         return {
           id: typeof layer.id === 'string' ? layer.id : `layer-${frameIndex}-${layerIndex}`,
           name: typeof layer.name === 'string' ? layer.name : `レイヤー ${layerIndex + 1}`,
@@ -2506,7 +2870,10 @@
       state.frames.forEach(frame => {
         frame.layers.forEach(layer => {
           layer.indices.fill(-1);
-          layer.direct.fill(0);
+          if (layer.direct instanceof Uint8ClampedArray) {
+            layer.direct.fill(0);
+            layer.direct = null;
+          }
         });
       });
       markHistoryDirty();
@@ -2552,17 +2919,21 @@
         const resized = createLayer(layer.name, width, height);
         const minW = Math.min(width, state.width);
         const minH = Math.min(height, state.height);
+        const sourceDirect = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
+        const targetDirect = sourceDirect ? ensureLayerDirect(resized, width, height) : null;
         for (let y = 0; y < minH; y += 1) {
           for (let x = 0; x < minW; x += 1) {
             const srcIdx = y * state.width + x;
             const dstIdx = y * width + x;
             resized.indices[dstIdx] = layer.indices[srcIdx];
-            const baseSrc = srcIdx * 4;
-            const baseDst = dstIdx * 4;
-            resized.direct[baseDst] = layer.direct[baseSrc];
-            resized.direct[baseDst + 1] = layer.direct[baseSrc + 1];
-            resized.direct[baseDst + 2] = layer.direct[baseSrc + 2];
-            resized.direct[baseDst + 3] = layer.direct[baseSrc + 3];
+            if (sourceDirect && targetDirect) {
+              const baseSrc = srcIdx * 4;
+              const baseDst = dstIdx * 4;
+              targetDirect[baseDst] = sourceDirect[baseSrc];
+              targetDirect[baseDst + 1] = sourceDirect[baseSrc + 1];
+              targetDirect[baseDst + 2] = sourceDirect[baseSrc + 2];
+              targetDirect[baseDst + 3] = sourceDirect[baseSrc + 3];
+            }
           }
         }
         resized.visible = layer.visible;
@@ -3718,6 +4089,8 @@
       imageData = new ImageData(width, height);
     }
 
+    const layerDirect = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
+
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const canvasX = bounds.x0 + x;
@@ -3733,10 +4106,17 @@
         const localBase = localIndex * 4;
         if (selected) {
           localIndices[localIndex] = layer.indices[canvasIndex];
-          localDirect[localBase] = layer.direct[canvasBase];
-          localDirect[localBase + 1] = layer.direct[canvasBase + 1];
-          localDirect[localBase + 2] = layer.direct[canvasBase + 2];
-          localDirect[localBase + 3] = layer.direct[canvasBase + 3];
+          if (layerDirect) {
+            localDirect[localBase] = layerDirect[canvasBase];
+            localDirect[localBase + 1] = layerDirect[canvasBase + 1];
+            localDirect[localBase + 2] = layerDirect[canvasBase + 2];
+            localDirect[localBase + 3] = layerDirect[canvasBase + 3];
+          } else {
+            localDirect[localBase] = 0;
+            localDirect[localBase + 1] = 0;
+            localDirect[localBase + 2] = 0;
+            localDirect[localBase + 3] = 0;
+          }
           if (imageData) {
             const paletteIndex = layer.indices[canvasIndex];
             let color = null;
@@ -3744,10 +4124,10 @@
               color = state.palette[paletteIndex];
             } else {
               color = {
-                r: layer.direct[canvasBase],
-                g: layer.direct[canvasBase + 1],
-                b: layer.direct[canvasBase + 2],
-                a: layer.direct[canvasBase + 3],
+                r: layerDirect ? layerDirect[canvasBase] : 0,
+                g: layerDirect ? layerDirect[canvasBase + 1] : 0,
+                b: layerDirect ? layerDirect[canvasBase + 2] : 0,
+                a: layerDirect ? layerDirect[canvasBase + 3] : 0,
               };
             }
             if (color) {
@@ -3810,6 +4190,7 @@
     if (!layer) {
       return;
     }
+    const layerDirect = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
     let modified = false;
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
@@ -3820,14 +4201,17 @@
         if (canvasX < 0 || canvasY < 0 || canvasX >= state.width || canvasY >= state.height) continue;
         const canvasIndex = canvasY * state.width + canvasX;
         const base = canvasIndex * 4;
-        if (layer.indices[canvasIndex] !== -1 || layer.direct[base + 3] !== 0) {
+        const alpha = layerDirect ? layerDirect[base + 3] : 0;
+        if (layer.indices[canvasIndex] !== -1 || alpha !== 0) {
           modified = true;
         }
         layer.indices[canvasIndex] = -1;
-        layer.direct[base] = 0;
-        layer.direct[base + 1] = 0;
-        layer.direct[base + 2] = 0;
-        layer.direct[base + 3] = 0;
+        if (layerDirect) {
+          layerDirect[base] = 0;
+          layerDirect[base + 1] = 0;
+          layerDirect[base + 2] = 0;
+          layerDirect[base + 3] = 0;
+        }
       }
     }
     if (modified) {
@@ -3877,6 +4261,8 @@
     const newBounds = { x0: state.width, y0: state.height, x1: -1, y1: -1 };
     let placed = false;
 
+    const targetDirect = direct ? ensureLayerDirect(layer) : null;
+
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const localIndex = y * width + x;
@@ -3890,10 +4276,12 @@
         const targetBase = targetIndex * 4;
         const localBase = localIndex * 4;
         layer.indices[targetIndex] = indices[localIndex];
-        layer.direct[targetBase] = direct[localBase];
-        layer.direct[targetBase + 1] = direct[localBase + 1];
-        layer.direct[targetBase + 2] = direct[localBase + 2];
-        layer.direct[targetBase + 3] = direct[localBase + 3];
+        if (targetDirect) {
+          targetDirect[targetBase] = direct[localBase];
+          targetDirect[targetBase + 1] = direct[localBase + 1];
+          targetDirect[targetBase + 2] = direct[localBase + 2];
+          targetDirect[targetBase + 3] = direct[localBase + 3];
+        }
         newMask[targetIndex] = 1;
         if (!placed) placed = true;
         if (targetX < newBounds.x0) newBounds.x0 = targetX;
@@ -4009,16 +4397,19 @@
     if (state.selectionMask && state.selectionMask[y * state.width + x] !== 1) return;
     const index = y * state.width + x;
     const base = index * 4;
+    const direct = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
 
     if (pointerState.tool === 'eraser') {
-      if (layer.indices[index] === -1 && layer.direct[base + 3] === 0) {
+      if (layer.indices[index] === -1 && (!direct || direct[base + 3] === 0)) {
         return;
       }
       layer.indices[index] = -1;
-      layer.direct[base] = 0;
-      layer.direct[base + 1] = 0;
-      layer.direct[base + 2] = 0;
-      layer.direct[base + 3] = 0;
+      if (direct) {
+        direct[base] = 0;
+        direct[base + 1] = 0;
+        direct[base + 2] = 0;
+        direct[base + 3] = 0;
+      }
       markHistoryDirty();
       markDirtyPixel(x, y);
       return;
@@ -4029,28 +4420,31 @@
         return;
       }
       layer.indices[index] = state.activePaletteIndex;
-      layer.direct[base] = 0;
-      layer.direct[base + 1] = 0;
-      layer.direct[base + 2] = 0;
-      layer.direct[base + 3] = 0;
+      if (direct) {
+        direct[base] = 0;
+        direct[base + 1] = 0;
+        direct[base + 2] = 0;
+        direct[base + 3] = 0;
+      }
       markHistoryDirty();
       markDirtyPixel(x, y);
     } else {
+      const writeDirect = direct || ensureLayerDirect(layer);
       const target = {
-        r: layer.direct[base],
-        g: layer.direct[base + 1],
-        b: layer.direct[base + 2],
-        a: layer.direct[base + 3],
+        r: writeDirect[base],
+        g: writeDirect[base + 1],
+        b: writeDirect[base + 2],
+        a: writeDirect[base + 3],
       };
       const blended = blendColors(target, state.activeRgb, state.brushOpacity);
       if (layer.indices[index] === -1 && target.r === blended.r && target.g === blended.g && target.b === blended.b && target.a === blended.a) {
         return;
       }
       layer.indices[index] = -1;
-      layer.direct[base] = blended.r;
-      layer.direct[base + 1] = blended.g;
-      layer.direct[base + 2] = blended.b;
-      layer.direct[base + 3] = blended.a;
+      writeDirect[base] = blended.r;
+      writeDirect[base + 1] = blended.g;
+      writeDirect[base + 2] = blended.b;
+      writeDirect[base + 3] = blended.a;
       markHistoryDirty();
       markDirtyPixel(x, y);
     }
@@ -4228,13 +4622,14 @@
         index = layer.indices[idx];
         break;
       }
+      const direct = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
       const base = idx * 4;
-      const a = layer.direct[base + 3];
+      const a = direct ? direct[base + 3] : 0;
       if (a > 0) {
         color = {
-          r: layer.direct[base],
-          g: layer.direct[base + 1],
-          b: layer.direct[base + 2],
+          r: direct ? direct[base] : 0,
+          g: direct ? direct[base + 1] : 0,
+          b: direct ? direct[base + 2] : 0,
           a,
         };
         mode = 'rgb';
@@ -4249,14 +4644,15 @@
     if (layer.indices[idx] >= 0) {
       return { type: 'index', index: layer.indices[idx] };
     }
+    const direct = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
     const base = idx * 4;
     return {
       type: 'rgb',
       color: {
-        r: layer.direct[base],
-        g: layer.direct[base + 1],
-        b: layer.direct[base + 2],
-        a: layer.direct[base + 3],
+        r: direct ? direct[base] : 0,
+        g: direct ? direct[base + 1] : 0,
+        b: direct ? direct[base + 2] : 0,
+        a: direct ? direct[base + 3] : 0,
       },
     };
   }
@@ -4377,7 +4773,8 @@
       return true;
     }
     const base = idx * 4;
-    return layer.direct[base + 3] > 0;
+    const direct = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
+    return direct ? direct[base + 3] > 0 : false;
   }
 
   function createSelectionByColor(x, y) {
@@ -4536,7 +4933,7 @@
       if (!layer || !layer.visible || layer.opacity <= 0) continue;
       const opacity = layer.opacity;
       const layerIndices = layer.indices;
-      const layerDirect = layer.direct;
+      const layerDirect = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
       for (let py = y0; py <= y1; py += 1) {
         const rowOffset = (py - y0) * regionWidth * 4;
         const layerRow = py * width;
@@ -4554,13 +4951,15 @@
             srcG = color.g;
             srcB = color.b;
             srcA = color.a;
-          } else {
+          } else if (layerDirect) {
             const directBase = pixelIndex * 4;
             srcA = layerDirect[directBase + 3];
             if (srcA === 0) continue;
             srcR = layerDirect[directBase];
             srcG = layerDirect[directBase + 1];
             srcB = layerDirect[directBase + 2];
+          } else {
+            continue;
           }
           const alpha = (srcA / 255) * opacity;
           if (alpha <= 0) continue;
