@@ -87,6 +87,8 @@
       clearCanvas: document.getElementById('clearCanvas'),
       enableAutosave: document.getElementById('enableAutosave'),
       autosaveStatus: document.getElementById('autosaveStatus'),
+      memoryUsage: document.getElementById('memoryUsage'),
+      memoryClear: document.getElementById('memoryClear'),
     },
     newProject: {
       button: document.getElementById('newProject'),
@@ -194,13 +196,14 @@
   const AUTOSAVE_DB_VERSION = 1;
   const AUTOSAVE_STORE_NAME = 'handles';
   const AUTOSAVE_HANDLE_KEY = 'document';
-  const AUTOSAVE_WRITE_DELAY = 800;
+  const AUTOSAVE_WRITE_DELAY = 1000;
   const DOCUMENT_FILE_VERSION = 1;
   let autosaveHandle = null;
   let pendingAutosaveHandle = null;
   let autosavePermissionListener = null;
   let autosaveWriteTimer = null;
   let autosaveRestoring = false;
+  let autosaveDirty = false;
   const brushOffsetCache = new Map();
 
   const rails = { leftCollapsed: false, rightCollapsed: window.innerWidth <= 900 };
@@ -216,9 +219,12 @@
   const SELECTION_DASH_SPEED = 40;
   let selectionDashScreenOffset = 0;
   let lastSelectionDashTime = 0;
-  const history = { past: [], future: [], pending: null, limit: 30 };
+  const history = { past: [], future: [], pending: null, limit: 20 };
   const fillPreviewCache = { key: null, pixels: null };
   const HISTORY_DRAW_TOOLS = new Set(['pen', 'eraser', 'line', 'curve', 'rect', 'rectFill', 'ellipse', 'ellipseFill', 'fill']);
+  const MEMORY_MONITOR_INTERVAL = 2000;
+  const MEMORY_WARNING_DEFAULT = 250 * 1024 * 1024;
+  let memoryMonitorHandle = null;
   let toolButtons = [];
   let renderScheduled = false;
   let layoutMode = null;
@@ -333,16 +339,12 @@
     };
   }
 
-  function makeHistorySnapshot() {
-    return {
+  function makeHistorySnapshot({ includeUiState = true, includeSelection = true, clonePixelData = true } = {}) {
+    const snapshot = {
       width: state.width,
       height: state.height,
       scale: state.scale,
       pan: { x: state.pan.x, y: state.pan.y },
-      tool: state.tool,
-      brushSize: state.brushSize,
-      brushOpacity: state.brushOpacity,
-      colorMode: state.colorMode,
       palette: state.palette.map(color => ({ ...color })),
       activePaletteIndex: state.activePaletteIndex,
       activeRgb: { ...state.activeRgb },
@@ -355,28 +357,214 @@
           name: layer.name,
           visible: layer.visible,
           opacity: layer.opacity,
-          indices: new Int16Array(layer.indices),
-          direct: new Uint8ClampedArray(layer.direct),
+          indices: clonePixelData ? new Int16Array(layer.indices) : layer.indices,
+          direct: clonePixelData ? new Uint8ClampedArray(layer.direct) : layer.direct,
         })),
       })),
-      activeFrame: state.activeFrame,
-      activeLayer: state.activeLayer,
-      selectionMask: state.selectionMask ? new Uint8Array(state.selectionMask) : null,
-      selectionBounds: state.selectionBounds ? { ...state.selectionBounds } : null,
       showGrid: state.showGrid,
       showMajorGrid: state.showMajorGrid,
       gridScreenStep: state.gridScreenStep,
       majorGridSpacing: state.majorGridSpacing,
       backgroundMode: state.backgroundMode,
-      activeToolGroup: state.activeToolGroup,
-      lastGroupTool: { ...(state.lastGroupTool || DEFAULT_GROUP_TOOL) },
-      activeLeftTab: state.activeLeftTab,
-      activeRightTab: state.activeRightTab,
       showPixelGuides: state.showPixelGuides,
       showChecker: state.showChecker,
-      playback: { ...state.playback },
       documentName: state.documentName,
     };
+
+    if (includeSelection) {
+      snapshot.activeFrame = state.activeFrame;
+      snapshot.activeLayer = state.activeLayer;
+      if (state.selectionMask) {
+        snapshot.selectionMask = new Uint8Array(state.selectionMask);
+      }
+      if (state.selectionBounds) {
+        snapshot.selectionBounds = { ...state.selectionBounds };
+      }
+    }
+
+    if (includeUiState) {
+      snapshot.tool = state.tool;
+      snapshot.brushSize = state.brushSize;
+      snapshot.brushOpacity = state.brushOpacity;
+      snapshot.colorMode = state.colorMode;
+      snapshot.activeToolGroup = state.activeToolGroup;
+      snapshot.lastGroupTool = { ...(state.lastGroupTool || DEFAULT_GROUP_TOOL) };
+      snapshot.activeLeftTab = state.activeLeftTab;
+      snapshot.activeRightTab = state.activeRightTab;
+      snapshot.playback = { ...state.playback };
+    }
+
+    return snapshot;
+  }
+
+  function bytesForLayer(layer) {
+    if (!layer) return 0;
+    const indices = layer.indices;
+    const direct = layer.direct;
+    const indicesBytes = indices && typeof indices.length === 'number' && indices.BYTES_PER_ELEMENT
+      ? indices.length * indices.BYTES_PER_ELEMENT
+      : (typeof indices === 'string' ? indices.length : 0);
+    const directBytes = direct && typeof direct.length === 'number' && direct.BYTES_PER_ELEMENT
+      ? direct.length * direct.BYTES_PER_ELEMENT
+      : (typeof direct === 'string' ? direct.length : 0);
+    return indicesBytes + directBytes;
+  }
+
+  function estimateStateBytes() {
+    let total = 0;
+    state.frames.forEach(frame => {
+      frame.layers.forEach(layer => {
+        total += bytesForLayer(layer);
+      });
+    });
+    if (state.selectionMask) {
+      total += state.selectionMask.length;
+    }
+    total += state.palette.length * 16;
+    return total;
+  }
+
+  function estimateSnapshotBytes(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return 0;
+    let total = 0;
+    if (Array.isArray(snapshot.frames)) {
+      snapshot.frames.forEach(frame => {
+        if (!frame || !Array.isArray(frame.layers)) return;
+        frame.layers.forEach(layer => {
+          total += bytesForLayer(layer);
+        });
+      });
+    }
+    if (snapshot.selectionMask) {
+      if (typeof snapshot.selectionMask.length === 'number') {
+        total += snapshot.selectionMask.length;
+      } else if (typeof snapshot.selectionMask === 'string') {
+        total += snapshot.selectionMask.length;
+      }
+    }
+    if (Array.isArray(snapshot.palette)) {
+      total += snapshot.palette.length * 16;
+    }
+    return total;
+  }
+
+  function estimateHistoryBytes(list) {
+    if (!Array.isArray(list)) return 0;
+    return list.reduce((sum, snapshot) => sum + estimateSnapshotBytes(snapshot), 0);
+  }
+
+  function getMemoryUsageBreakdown() {
+    const current = estimateStateBytes();
+    const past = estimateHistoryBytes(history.past);
+    const future = estimateHistoryBytes(history.future);
+    const pending = history.pending && history.pending.before ? estimateSnapshotBytes(history.pending.before) : 0;
+    return { current, past, future, pending, total: current + past + future + pending };
+  }
+
+  function trimHistoryForMemoryIfNeeded(breakdown) {
+    if (!memoryThresholds || !Number.isFinite(memoryThresholds.warningBytes)) {
+      return breakdown || getMemoryUsageBreakdown();
+    }
+    let usage = breakdown || getMemoryUsageBreakdown();
+    if (usage.total <= memoryThresholds.warningBytes) {
+      return usage;
+    }
+    let total = usage.total;
+    const warning = memoryThresholds.warningBytes;
+    let trimmed = false;
+    while (total > warning && (history.past.length || history.future.length)) {
+      let removed;
+      if (history.future.length && history.future.length >= history.past.length) {
+        removed = history.future.shift();
+      } else {
+        removed = history.past.shift();
+      }
+      total -= estimateSnapshotBytes(removed);
+      trimmed = true;
+    }
+    if (trimmed) {
+      updateHistoryButtons();
+      autosaveDirty = true;
+      scheduleAutosaveSnapshot();
+      usage = getMemoryUsageBreakdown();
+    }
+    return usage;
+  }
+
+  function computeMemoryThresholds() {
+    let maxBytes = null;
+    if (performance && performance.memory && Number.isFinite(performance.memory.jsHeapSizeLimit)) {
+      maxBytes = performance.memory.jsHeapSizeLimit;
+    } else if (navigator && Number.isFinite(navigator.deviceMemory)) {
+      maxBytes = navigator.deviceMemory * 1024 * 1024 * 1024;
+    }
+    const warningBytes = maxBytes ? Math.floor(maxBytes * 0.7) : MEMORY_WARNING_DEFAULT;
+    return { maxBytes, warningBytes };
+  }
+
+  const memoryThresholds = computeMemoryThresholds();
+
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+    const KB = 1024;
+    const MB = KB * 1024;
+    const GB = MB * 1024;
+    if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
+    if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
+    if (bytes >= KB) return `${(bytes / KB).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }
+
+  function updateMemoryStatus() {
+    const usageNode = dom.controls.memoryUsage || document.getElementById('memoryUsage');
+    if (!usageNode) return;
+    let usage = getMemoryUsageBreakdown();
+    usage = trimHistoryForMemoryIfNeeded(usage);
+    let text = `メモリ: ${formatBytes(usage.total)}`;
+    if (memoryThresholds.maxBytes) {
+      text += ` | 警告 ${formatBytes(memoryThresholds.warningBytes)} | 上限目安 ${formatBytes(memoryThresholds.maxBytes)}`;
+    } else {
+      text += ` | 警告 ${formatBytes(memoryThresholds.warningBytes)}`;
+    }
+    usageNode.textContent = text;
+    usageNode.style.color = usage.total >= memoryThresholds.warningBytes ? '#ff5c5c' : '';
+  }
+
+  function clearMemoryUsage() {
+    history.past = [];
+    history.future = [];
+    history.pending = null;
+    fillPreviewCache.key = null;
+    fillPreviewCache.pixels = null;
+    updateHistoryButtons();
+    autosaveDirty = true;
+    updateMemoryStatus();
+    scheduleAutosaveSnapshot();
+  }
+
+  function initMemoryMonitor() {
+    if (!dom.controls.memoryUsage) {
+      dom.controls.memoryUsage = document.getElementById('memoryUsage');
+    }
+    if (!dom.controls.memoryClear) {
+      dom.controls.memoryClear = document.getElementById('memoryClear');
+    }
+    const usageNode = dom.controls.memoryUsage;
+    if (!usageNode) return;
+    updateMemoryStatus();
+    if (memoryMonitorHandle !== null) {
+      window.clearInterval(memoryMonitorHandle);
+    }
+    memoryMonitorHandle = window.setInterval(updateMemoryStatus, MEMORY_MONITOR_INTERVAL);
+    const clearButtons = document.querySelectorAll('#memoryClear');
+    clearButtons.forEach(button => {
+      if (button.dataset.memoryBound) return;
+      button.dataset.memoryBound = 'true';
+      button.addEventListener('click', () => {
+        clearMemoryUsage();
+        updateMemoryStatus();
+      });
+    });
   }
 
   function applyHistorySnapshot(snapshot) {
@@ -384,10 +572,18 @@
     state.height = snapshot.height;
     state.scale = normalizeZoomScale(snapshot.scale, state.scale || MIN_ZOOM_SCALE);
     state.pan = { x: snapshot.pan.x, y: snapshot.pan.y };
-    state.tool = snapshot.tool;
-    state.brushSize = snapshot.brushSize;
-    state.brushOpacity = snapshot.brushOpacity;
-    state.colorMode = snapshot.colorMode;
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'tool')) {
+      state.tool = snapshot.tool;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'brushSize')) {
+      state.brushSize = snapshot.brushSize;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'brushOpacity')) {
+      state.brushOpacity = snapshot.brushOpacity;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'colorMode')) {
+      state.colorMode = snapshot.colorMode;
+    }
     state.palette = snapshot.palette.map(color => ({ ...color }));
     state.activePaletteIndex = snapshot.activePaletteIndex;
     state.activeRgb = { ...snapshot.activeRgb };
@@ -404,22 +600,44 @@
         direct: new Uint8ClampedArray(layer.direct),
       })),
     }));
-    state.activeFrame = snapshot.activeFrame;
-    state.activeLayer = snapshot.activeLayer;
-    state.selectionMask = snapshot.selectionMask ? new Uint8Array(snapshot.selectionMask) : null;
-    state.selectionBounds = snapshot.selectionBounds ? { ...snapshot.selectionBounds } : null;
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeFrame')) {
+      state.activeFrame = snapshot.activeFrame;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeLayer')) {
+      state.activeLayer = snapshot.activeLayer;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'selectionMask')) {
+      state.selectionMask = snapshot.selectionMask ? new Uint8Array(snapshot.selectionMask) : null;
+    } else {
+      state.selectionMask = null;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'selectionBounds')) {
+      state.selectionBounds = snapshot.selectionBounds ? { ...snapshot.selectionBounds } : null;
+    } else {
+      state.selectionBounds = null;
+    }
     state.showGrid = snapshot.showGrid;
     state.showMajorGrid = snapshot.showMajorGrid ?? false;
     state.gridScreenStep = snapshot.gridScreenStep ?? state.gridScreenStep ?? 16;
     state.majorGridSpacing = snapshot.majorGridSpacing ?? state.majorGridSpacing ?? 16;
     state.backgroundMode = snapshot.backgroundMode ?? 'dark';
-    state.activeToolGroup = snapshot.activeToolGroup ?? state.activeToolGroup ?? TOOL_TO_GROUP[state.tool] ?? 'pen';
-    state.lastGroupTool = { ...DEFAULT_GROUP_TOOL, ...(snapshot.lastGroupTool || {}) };
-    state.activeLeftTab = snapshot.activeLeftTab ?? state.activeLeftTab ?? 'tools';
-    state.activeRightTab = snapshot.activeRightTab ?? state.activeRightTab ?? 'frames';
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeToolGroup')) {
+      state.activeToolGroup = snapshot.activeToolGroup ?? state.activeToolGroup ?? TOOL_TO_GROUP[state.tool] ?? 'pen';
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'lastGroupTool')) {
+      state.lastGroupTool = { ...DEFAULT_GROUP_TOOL, ...(snapshot.lastGroupTool || {}) };
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeLeftTab')) {
+      state.activeLeftTab = snapshot.activeLeftTab ?? state.activeLeftTab ?? 'tools';
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'activeRightTab')) {
+      state.activeRightTab = snapshot.activeRightTab ?? state.activeRightTab ?? 'frames';
+    }
     state.showPixelGuides = snapshot.showPixelGuides;
     state.showChecker = snapshot.showChecker;
-    state.playback = { ...snapshot.playback };
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'playback')) {
+      state.playback = { ...snapshot.playback };
+    }
     state.documentName = normalizeDocumentName(snapshot.documentName);
 
     pointerState.active = false;
@@ -443,6 +661,7 @@
     updateHistoryButtons();
     updateDocumentMetadata();
     scheduleSessionPersist();
+    updateMemoryStatus();
   }
 
   function normalizeDocumentName(value) {
@@ -492,6 +711,7 @@
 
   function markHistoryDirty() {
     invalidateFillPreviewCache();
+    autosaveDirty = true;
     if (history.pending) {
       history.pending.dirty = true;
     }
@@ -510,6 +730,7 @@
     history.pending = null;
     updateHistoryButtons();
     scheduleSessionPersist();
+    updateMemoryStatus();
   }
 
   function undo() {
@@ -523,6 +744,8 @@
     const previous = history.past.pop();
     applyHistorySnapshot(previous);
     updateHistoryButtons();
+    autosaveDirty = true;
+    scheduleAutosaveSnapshot();
   }
 
   function redo() {
@@ -536,6 +759,8 @@
     const next = history.future.pop();
     applyHistorySnapshot(next);
     updateHistoryButtons();
+    autosaveDirty = true;
+    scheduleAutosaveSnapshot();
   }
 
   function updateHistoryButtons() {
@@ -1130,13 +1355,11 @@
     if (dom.controls.canvasHeight) {
       dom.controls.canvasHeight.value = String(state.height);
     }
-    if (dom.controls.toggleGrid) {
-      dom.controls.toggleGrid.setAttribute('aria-pressed', String(state.showGrid));
-      dom.controls.toggleGrid.classList.toggle('is-active', state.showGrid);
+    if (dom.controls.toggleGrid instanceof HTMLInputElement) {
+      dom.controls.toggleGrid.checked = state.showGrid;
     }
-    if (dom.controls.toggleMajorGrid) {
-      dom.controls.toggleMajorGrid.setAttribute('aria-pressed', String(state.showMajorGrid));
-      dom.controls.toggleMajorGrid.classList.toggle('is-active', state.showMajorGrid);
+    if (dom.controls.toggleMajorGrid instanceof HTMLInputElement) {
+      dom.controls.toggleMajorGrid.checked = state.showMajorGrid;
     }
     if (dom.controls.toggleBackgroundMode) {
       const labelMap = {
@@ -1243,6 +1466,7 @@
     if (!AUTOSAVE_SUPPORTED) return;
     if (!autosaveHandle) return;
     if (autosaveRestoring) return;
+    if (!autosaveDirty) return;
     if (autosaveWriteTimer !== null) {
       window.clearTimeout(autosaveWriteTimer);
     }
@@ -1255,9 +1479,10 @@
     }, AUTOSAVE_WRITE_DELAY);
   }
 
-  async function writeAutosaveSnapshot() {
+  async function writeAutosaveSnapshot(force = false) {
     if (!AUTOSAVE_SUPPORTED) return;
     if (!autosaveHandle) return;
+    if (!force && !autosaveDirty) return;
     const granted = await ensureHandlePermission(autosaveHandle, { request: false });
     if (!granted) {
       schedulePendingAutosavePermission(autosaveHandle);
@@ -1272,6 +1497,7 @@
       const writable = await autosaveHandle.createWritable();
       await writable.write(json);
       await writable.close();
+      autosaveDirty = false;
       updateAutosaveStatus('自動保存: 保存済み', 'success');
     } catch (error) {
       throw error;
@@ -1298,6 +1524,8 @@
       history.future = [];
       history.pending = null;
       autosaveRestoring = false;
+      autosaveDirty = false;
+      updateMemoryStatus();
       return true;
     } catch (error) {
       autosaveRestoring = false;
@@ -1337,7 +1565,8 @@
         dom.controls.enableAutosave.textContent = '保存先を変更';
       }
       updateAutosaveStatus('自動保存: 保存中…');
-      await writeAutosaveSnapshot();
+      autosaveDirty = true;
+      await writeAutosaveSnapshot(true);
     } catch (error) {
       if (error && error.name === 'AbortError') {
         updateAutosaveStatus('自動保存: キャンセルしました', 'warn');
@@ -2001,10 +2230,11 @@
     setupControls();
     setupTools();
     setupToolGroups();
-   setupPaletteEditor();
-   setupFramesAndLayers();
-   setupCanvas();
-   setupKeyboard();
+    setupPaletteEditor();
+    setupFramesAndLayers();
+    setupCanvas();
+    setupKeyboard();
+    initMemoryMonitor();
     updateDocumentMetadata();
     renderEverything();
   }
@@ -2167,23 +2397,23 @@
   }
 
   function setupControls() {
-    dom.controls.toggleGrid?.addEventListener('click', () => {
-      state.showGrid = !state.showGrid;
-      dom.controls.toggleGrid?.setAttribute('aria-pressed', String(state.showGrid));
-      dom.controls.toggleGrid?.classList.toggle('is-active', state.showGrid);
-      updateGridDecorations();
-      requestOverlayRender();
-      scheduleSessionPersist();
-    });
+    if (dom.controls.toggleGrid instanceof HTMLInputElement) {
+      dom.controls.toggleGrid.addEventListener('change', () => {
+        state.showGrid = dom.controls.toggleGrid.checked;
+        updateGridDecorations();
+        requestOverlayRender();
+        scheduleSessionPersist();
+      });
+    }
 
-    dom.controls.toggleMajorGrid?.addEventListener('click', () => {
-      state.showMajorGrid = !state.showMajorGrid;
-      dom.controls.toggleMajorGrid?.setAttribute('aria-pressed', String(state.showMajorGrid));
-      dom.controls.toggleMajorGrid?.classList.toggle('is-active', state.showMajorGrid);
-      updateGridDecorations();
-      requestOverlayRender();
-      scheduleSessionPersist();
-    });
+    if (dom.controls.toggleMajorGrid instanceof HTMLInputElement) {
+      dom.controls.toggleMajorGrid.addEventListener('change', () => {
+        state.showMajorGrid = dom.controls.toggleMajorGrid.checked;
+        updateGridDecorations();
+        requestOverlayRender();
+        scheduleSessionPersist();
+      });
+    }
 
     dom.controls.toggleBackgroundMode?.addEventListener('click', () => {
       const modes = ['dark', 'light', 'pink'];
