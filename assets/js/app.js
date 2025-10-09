@@ -5147,45 +5147,11 @@
     activeTouchPointers.set(event.pointerId, {
       x: event.clientX,
       y: event.clientY,
-      isPrimary: event.isPrimary === true,
-    });
-    prunePrimaryTouchPointers(event.isPrimary ? event.pointerId : null);
-  }
-
-  function prunePrimaryTouchPointers(preferredPointerId = null) {
-    let primaryPointerIds = [];
-    activeTouchPointers.forEach((pointer, pointerId) => {
-      if (pointer?.isPrimary) {
-        primaryPointerIds.push(pointerId);
-      }
-    });
-    if (primaryPointerIds.length <= 1) {
-      return;
-    }
-    const fallbackId = primaryPointerIds[primaryPointerIds.length - 1];
-    const keepId = preferredPointerId && activeTouchPointers.get(preferredPointerId)?.isPrimary
-      ? preferredPointerId
-      : fallbackId;
-    primaryPointerIds.forEach(pointerId => {
-      if (pointerId !== keepId) {
-        activeTouchPointers.delete(pointerId);
-      }
     });
   }
 
-  function hasActiveMultiTouch({ requireNonPrimary = false } = {}) {
-    if (activeTouchPointers.size < TOUCH_PAN_MIN_POINTERS) {
-      return false;
-    }
-    if (!requireNonPrimary) {
-      return true;
-    }
-    for (const pointer of activeTouchPointers.values()) {
-      if (pointer && pointer.isPrimary === false) {
-        return true;
-      }
-    }
-    return false;
+  function hasActiveMultiTouch() {
+    return activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS;
   }
 
   function removeTouchPointer(event) {
@@ -5255,6 +5221,7 @@
     pointerState.touchPanStart = null;
     pointerState.startClient = null;
     pointerState.path = [];
+    activeTouchPointers.clear();
     requestOverlayRender();
     scheduleSessionPersist();
   }
@@ -5274,7 +5241,7 @@
       return;
     }
 
-    if (isTouch && hasActiveMultiTouch({ requireNonPrimary: true })) {
+    if (isTouch && hasActiveMultiTouch()) {
       event.preventDefault();
       if (!pointerState.active || pointerState.tool !== 'pan' || pointerState.panMode !== 'multiTouch') {
         abortActivePointerInteraction();
@@ -5299,7 +5266,7 @@
     }
 
     if (activeTool === 'pan') {
-      startPanInteraction(event, { multiTouch: isTouch && hasActiveMultiTouch({ requireNonPrimary: true }) });
+      startPanInteraction(event, { multiTouch: isTouch && hasActiveMultiTouch() });
       return;
     }
 
