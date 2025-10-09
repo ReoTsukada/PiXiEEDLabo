@@ -10,14 +10,16 @@
   "theme_color": "#1f1f1f",
   "icons": [
     {
-      "src": "assets/icons/menu-canvas.png",
-      "sizes": "42x42",
-      "type": "image/png"
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "assets/icons/tool-cursor.png",
-      "sizes": "64x64",
-      "type": "image/png"
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }
