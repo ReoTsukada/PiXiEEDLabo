@@ -19,7 +19,7 @@
               <span class="sr-only">ツール</span>
             </button>
             <button type="button" class="rail-tab" id="leftTabColorButton" data-left-tab="color" role="tab" aria-selected="false" aria-controls="panelColor" tabindex="-1" aria-label="カラー">
-              <span class="tab-swatch" id="colorTabSwatch"></span>
+              <span class="tab-swatch pixel-frame" id="colorTabSwatch"></span>
               <span class="sr-only">カラー</span>
             </button>
           </div>
@@ -67,7 +67,7 @@
             <span class="sr-only">ツール</span>
           </button>
           <button type="button" class="mobile-tab" id="mobileTabColor" data-mobile-tab="color" role="tab" aria-controls="mobilePanelColor" aria-selected="false" tabindex="-1" aria-label="カラー">
-            <span class="tab-swatch" id="mobileColorTabSwatch"></span>
+            <span class="tab-swatch pixel-frame" id="mobileColorTabSwatch"></span>
             <span class="sr-only">カラー</span>
           </button>
           <button type="button" class="mobile-tab" id="mobileTabFrames" data-mobile-tab="frames" role="tab" aria-controls="mobilePanelFrames" aria-selected="false" tabindex="-1" aria-label="フレームとレイヤー">
@@ -214,13 +214,13 @@
           <div class="timeline-card" role="group" aria-label="レイヤーとフレームのタイムライン">
             <div class="timeline-toolbar">
               <div class="timeline-toolbar__group" role="group" aria-label="レイヤー操作">
-                <button type="button" class="chip" id="addLayer" aria-label="レイヤーを追加">＋</button>
-                <button type="button" class="chip" id="removeLayer" aria-label="レイヤーを削除">－</button>
+                <button type="button" class="pixel-button pixel-frame" id="addLayer" aria-label="レイヤーを追加">＋</button>
+                <button type="button" class="pixel-button pixel-frame" id="removeLayer" aria-label="レイヤーを削除">－</button>
                 <span class="timeline-toolbar__label">レイヤー</span>
               </div>
               <div class="timeline-toolbar__group" role="group" aria-label="フレーム操作">
-                <button type="button" class="chip" id="addFrame" aria-label="フレームを追加">＋</button>
-                <button type="button" class="chip" id="removeFrame" aria-label="フレームを削除">－</button>
+                <button type="button" class="pixel-button pixel-frame" id="addFrame" aria-label="フレームを追加">＋</button>
+                <button type="button" class="pixel-button pixel-frame" id="removeFrame" aria-label="フレームを削除">－</button>
                 <span class="timeline-toolbar__label">フレーム</span>
               </div>
             </div>
@@ -229,10 +229,10 @@
             </div>
             <div class="timeline-footer">
               <div class="timeline-playback" role="group" aria-label="再生ボタン群">
-                <button type="button" class="chip" id="rewindAnimation" aria-label="最初のフレームへ">⏮</button>
-                <button type="button" class="chip" id="playAnimation" aria-label="再生">▶</button>
-                <button type="button" class="chip" id="stopAnimation" aria-label="停止">■</button>
-                <button type="button" class="chip" id="forwardAnimation" aria-label="次のフレームへ">⏭</button>
+                <button type="button" class="pixel-button pixel-frame" id="rewindAnimation" aria-label="最初のフレームへ">⏮</button>
+                <button type="button" class="pixel-button pixel-frame" id="playAnimation" aria-label="再生">▶</button>
+                <button type="button" class="pixel-button pixel-frame" id="stopAnimation" aria-label="停止">■</button>
+                <button type="button" class="pixel-button pixel-frame" id="forwardAnimation" aria-label="次のフレームへ">⏭</button>
               </div>
               <div class="timeline-fps" role="group" aria-label="フレームレート設定">
                 <label class="field field--tiny timeline-fps-control">
