@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'pixieedraw-static-v1';
+const CACHE_VERSION = 'pixieedraw-static-v9';
 const APP_SHELL = [
   './',
   './index.html',
