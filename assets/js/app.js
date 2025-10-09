@@ -428,19 +428,11 @@
       panOrigin: { x: 0, y: 0 },
       panMode: null,
       touchPanStart: null,
-      pinchStartDistance: null,
-      pinchStartScale: null,
-      pinchLastDistance: null,
-      pinchDirection: null,
-      multiTouchGesture: null,
       curveHandle: null,
     };
   }
 
   const TOUCH_PAN_MIN_POINTERS = 2;
-  const PINCH_DISTANCE_EPSILON = 6;
-  const PINCH_RATIO_EPSILON = 0.015;
-  const PAN_MOVE_EPSILON = 6;
   const activeTouchPointers = new Map();
 
   function makeHistorySnapshot({ includeUiState = true, includeSelection = true, clonePixelData = true } = {}) {
@@ -5080,31 +5072,6 @@
     };
   }
 
-  function getViewportCenterFocus() {
-    const drawing = dom.canvases.drawing;
-    if (drawing) {
-      const rect = drawing.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
-        const focus = getCanvasFocusAt(centerX, centerY);
-        if (focus) {
-          return focus;
-        }
-      }
-    }
-    const worldX = state.width / 2;
-    const worldY = state.height / 2;
-    return {
-      clientX: 0,
-      clientY: 0,
-      worldX,
-      worldY,
-      cellX: Math.floor(worldX),
-      cellY: Math.floor(worldY),
-    };
-  }
-
   function handleCanvasWheel(event) {
     const focus = getCanvasFocusAt(event.clientX, event.clientY);
     if (!focus) {
@@ -5176,11 +5143,6 @@
     pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
     pointerState.panMode = null;
     pointerState.touchPanStart = null;
-    pointerState.pinchStartDistance = null;
-    pointerState.pinchStartScale = null;
-    pointerState.pinchLastDistance = null;
-    pointerState.pinchDirection = null;
-    pointerState.multiTouchGesture = null;
     pointerState.curveHandle = null;
     if (shouldCommit) {
       commitHistory();
@@ -5220,46 +5182,18 @@
     activeTouchPointers.delete(event.pointerId);
   }
 
-  function getTouchPoints() {
+  function getTouchCentroid() {
     if (!activeTouchPointers.size) {
-      return [];
-    }
-    return Array.from(activeTouchPointers.values());
-  }
-
-  function getTouchMetrics() {
-    const points = getTouchPoints();
-    if (!points.length) {
       return null;
     }
     let sumX = 0;
     let sumY = 0;
-    points.forEach(point => {
+    activeTouchPointers.forEach(point => {
       sumX += point.x;
       sumY += point.y;
     });
-    const count = points.length;
-    const centroid = { x: sumX / count, y: sumY / count };
-    let distance = 0;
-    if (count >= TOUCH_PAN_MIN_POINTERS) {
-      if (count === 2) {
-        const [a, b] = points;
-        distance = Math.hypot(a.x - b.x, a.y - b.y);
-      } else {
-        let radiusSum = 0;
-        points.forEach(point => {
-          radiusSum += Math.hypot(point.x - centroid.x, point.y - centroid.y);
-        });
-        const averageRadius = radiusSum / count;
-        distance = averageRadius * 2;
-      }
-    }
-    return { centroid, distance, points };
-  }
-
-  function getTouchCentroid() {
-    const metrics = getTouchMetrics();
-    return metrics ? metrics.centroid : null;
+    const count = activeTouchPointers.size;
+    return { x: sumX / count, y: sumY / count };
   }
 
   function refreshTouchPanBaseline() {
@@ -5273,27 +5207,17 @@
     pointerState.panMode = multiTouch ? 'multiTouch' : 'single';
     pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
     pointerState.path = [];
-    pointerState.multiTouchGesture = null;
-    pointerState.pinchDirection = null;
     if (multiTouch) {
       pointerState.pointerId = null;
       pointerState.startClient = null;
-      const metrics = getTouchMetrics();
-      pointerState.touchPanStart = metrics?.centroid || getTouchCentroid();
+      pointerState.touchPanStart = getTouchCentroid();
       if (!pointerState.touchPanStart) {
         pointerState.touchPanStart = { x: event.clientX, y: event.clientY };
       }
-      pointerState.pinchStartDistance = metrics?.distance || null;
-      pointerState.pinchStartScale = state.scale;
-      pointerState.pinchLastDistance = pointerState.pinchStartDistance;
     } else {
       pointerState.pointerId = event.pointerId;
       pointerState.startClient = { x: event.clientX, y: event.clientY };
       pointerState.touchPanStart = null;
-      pointerState.pinchStartDistance = null;
-      pointerState.pinchStartScale = null;
-      pointerState.pinchLastDistance = null;
-      pointerState.pinchDirection = null;
       if (dom.canvases.drawing) {
         dom.canvases.drawing.setPointerCapture(event.pointerId);
       }
@@ -5318,11 +5242,6 @@
     pointerState.touchPanStart = null;
     pointerState.startClient = null;
     pointerState.path = [];
-    pointerState.pinchStartDistance = null;
-    pointerState.pinchStartScale = null;
-    pointerState.pinchLastDistance = null;
-    pointerState.pinchDirection = null;
-    pointerState.multiTouchGesture = null;
     activeTouchPointers.clear();
     requestOverlayRender();
     scheduleSessionPersist();
@@ -5480,63 +5399,19 @@
         if (!activeTouchPointers.has(event.pointerId)) {
           return;
         }
-        const metrics = getTouchMetrics();
-        if (!metrics) {
-          return;
-        }
-        const { centroid, distance } = metrics;
         if (!pointerState.touchPanStart) {
-          pointerState.touchPanStart = centroid;
-          pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
+          refreshTouchPanBaseline();
         }
-        const hasDistance = Number.isFinite(distance) && distance > 0;
-        if (hasDistance && !pointerState.pinchStartDistance) {
-          pointerState.pinchStartDistance = distance;
-          pointerState.pinchLastDistance = distance;
-          pointerState.pinchStartScale = state.scale;
-        }
-        const centroidDx = centroid.x - (pointerState.touchPanStart?.x || centroid.x);
-        const centroidDy = centroid.y - (pointerState.touchPanStart?.y || centroid.y);
-        const centroidDelta = Math.hypot(centroidDx, centroidDy);
-        const distanceDelta = hasDistance && pointerState.pinchStartDistance
-          ? Math.abs(distance - pointerState.pinchStartDistance)
-          : 0;
-        let gesture = pointerState.multiTouchGesture;
-        if (!gesture) {
-          if (hasDistance && distanceDelta > PINCH_DISTANCE_EPSILON) {
-            gesture = 'pinch';
-          } else if (centroidDelta > PAN_MOVE_EPSILON) {
-            gesture = 'pan';
-          }
-          if (gesture) {
-            pointerState.multiTouchGesture = gesture;
-          }
-        }
-        if (gesture === 'pinch') {
-          if (!hasDistance || !pointerState.pinchStartDistance) {
-            pointerState.pinchStartDistance = distance;
-            pointerState.pinchLastDistance = distance;
-            pointerState.pinchStartScale = state.scale;
-            return;
-          }
-          const ratio = distance / pointerState.pinchStartDistance;
-          if (!Number.isFinite(ratio) || Math.abs(ratio - 1) <= PINCH_RATIO_EPSILON) {
-            pointerState.pinchLastDistance = distance;
-            return;
-          }
-          pointerState.pinchDirection = ratio > 1 ? 'out' : 'in';
-          const maxScale = ZOOM_STEPS[ZOOM_STEPS.length - 1];
-          const targetScale = clamp(pointerState.pinchStartScale * ratio, MIN_ZOOM_SCALE, maxScale);
-          setZoom(targetScale, getViewportCenterFocus());
-          pointerState.pinchStartDistance = distance;
-          pointerState.pinchLastDistance = distance;
-          pointerState.pinchStartScale = state.scale;
+        const centroid = getTouchCentroid();
+        if (!centroid || !pointerState.touchPanStart) {
           return;
         }
+        const dx = centroid.x - pointerState.touchPanStart.x;
+        const dy = centroid.y - pointerState.touchPanStart.y;
         const originX = pointerState.panOrigin?.x || 0;
         const originY = pointerState.panOrigin?.y || 0;
-        state.pan.x = Math.round(originX + centroidDx);
-        state.pan.y = Math.round(originY + centroidDy);
+        state.pan.x = Math.round(originX + dx);
+        state.pan.y = Math.round(originY + dy);
         applyViewportTransform();
         return;
       }
@@ -5586,15 +5461,7 @@
     if (isPanTool) {
       if (isMultiTouchPan) {
         if (hasActiveMultiTouch()) {
-          if (pointerState.multiTouchGesture === 'pinch') {
-            const metrics = getTouchMetrics();
-            const distance = metrics?.distance || null;
-            pointerState.pinchStartDistance = distance;
-            pointerState.pinchLastDistance = distance;
-            pointerState.pinchStartScale = state.scale;
-          } else {
-            refreshTouchPanBaseline();
-          }
+          refreshTouchPanBaseline();
           return;
         }
         finishPanInteraction();
