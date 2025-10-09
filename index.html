@@ -63,9 +63,6 @@
       </div>
 
       <section class="panel-section" id="panelTools" data-section="tools">
-        <header class="panel-section__header">
-          <h2>ツール</h2>
-        </header>
         <div class="panel-section__body">
           <div class="tool-group-tabs" role="tablist" aria-label="ツールカテゴリ">
             <button type="button" class="tool-group-button is-active" data-tool-group="selection" role="tab" aria-selected="true">範囲選択</button>
@@ -144,9 +141,6 @@
       </section>
 
       <section class="panel-section" id="panelColor" data-section="color">
-        <header class="panel-section__header">
-          <h2>カラー</h2>
-        </header>
         <div class="panel-section__body">
           <fieldset class="field field--inline" role="radiogroup" aria-label="カラーモード">
             <legend>モード</legend>
@@ -220,43 +214,30 @@
       </section>
 
       <section class="panel-section" id="panelFrames" data-section="frames">
-        <header class="panel-section__header">
-          <h2>フレーム &amp; レイヤー</h2>
-        </header>
         <div class="panel-section__body">
-          <div class="subtabs" role="tablist" aria-label="フレームとレイヤーの切替">
-            <button type="button" class="subtab is-active" data-subtab="layers" role="tab" aria-controls="layersPane" aria-selected="true">レイヤー</button>
-            <button type="button" class="subtab" data-subtab="frames" role="tab" aria-controls="framesPane" aria-selected="false" tabindex="-1">フレーム</button>
-          </div>
-          <div class="subtab-panels">
-            <div class="subtab-panel is-active" id="layersPane" role="tabpanel" aria-labelledby="layersTab">
-              <div class="list-header">
-                <span>レイヤー</span>
-                <div class="list-actions">
-                  <button type="button" class="chip" id="addLayer">＋</button>
-                  <button type="button" class="chip" id="removeLayer">－</button>
-                </div>
+          <div class="timeline-card" role="group" aria-label="レイヤーとフレームのタイムライン">
+            <div class="timeline-toolbar">
+              <div class="timeline-toolbar__group" role="group" aria-label="レイヤー操作">
+                <button type="button" class="chip" id="addLayer" aria-label="レイヤーを追加">＋</button>
+                <button type="button" class="chip" id="removeLayer" aria-label="レイヤーを削除">－</button>
+                <span class="timeline-toolbar__label">レイヤー</span>
               </div>
-              <ul class="item-list" id="layerList" aria-label="レイヤー一覧"></ul>
+              <div class="timeline-toolbar__group" role="group" aria-label="フレーム操作">
+                <button type="button" class="chip" id="addFrame" aria-label="フレームを追加">＋</button>
+                <button type="button" class="chip" id="removeFrame" aria-label="フレームを削除">－</button>
+                <span class="timeline-toolbar__label">フレーム</span>
+              </div>
             </div>
-            <div class="subtab-panel" id="framesPane" role="tabpanel" aria-labelledby="mobileTabFrames" hidden>
-              <div class="list-header">
-                <span>フレーム</span>
-                <div class="list-actions">
-                  <button type="button" class="chip" id="addFrame">＋</button>
-                  <button type="button" class="chip" id="removeFrame">－</button>
-                </div>
-              </div>
-              <ul class="item-list" id="frameList" aria-label="フレーム一覧"></ul>
-              <div class="field">
-                <span>再生</span>
-                <div class="timeline">
-                  <button type="button" class="chip" id="playAnimation">▶</button>
-                  <label class="field field--tiny">
-                    <span>fps</span>
-                    <input type="number" id="animationFps" min="1" max="60" value="12" />
-                  </label>
-                </div>
+            <div class="timeline-matrix-wrapper">
+              <div class="timeline-matrix" id="timelineMatrix" role="grid" aria-label="フレームとレイヤーの一覧"></div>
+            </div>
+            <div class="timeline-footer">
+              <div class="timeline" role="group" aria-label="アニメーション制御">
+                <button type="button" class="chip" id="playAnimation">▶</button>
+                <label class="field field--tiny timeline-fps-control">
+                  <span>fps</span>
+                  <input type="number" id="animationFps" min="1" max="60" value="12" />
+                </label>
               </div>
             </div>
           </div>
@@ -264,9 +245,6 @@
       </section>
 
       <section class="panel-section" id="panelSettings" data-section="settings">
-        <header class="panel-section__header">
-          <h2>設定</h2>
-        </header>
         <div class="panel-section__body">
           <label class="field">
             <span>キャンバスサイズ</span>
