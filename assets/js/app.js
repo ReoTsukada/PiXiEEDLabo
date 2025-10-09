@@ -1205,6 +1205,27 @@
     scheduleAutosaveSnapshot();
   }
 
+  function rollbackPendingHistory({ reRender = true } = {}) {
+    if (!history.pending || !history.pending.before) {
+      history.pending = null;
+      return false;
+    }
+    const snapshot = decompressHistorySnapshot(history.pending.before);
+    history.pending = null;
+    applyHistorySnapshot(snapshot);
+    updateHistoryButtons();
+    autosaveDirty = true;
+    if (reRender) {
+      renderEverything();
+      requestOverlayRender();
+    } else {
+      requestRender();
+      requestOverlayRender();
+    }
+    scheduleSessionPersist();
+    return true;
+  }
+
   function updateHistoryButtons() {
     if (dom.controls.undoAction) {
       dom.controls.undoAction.disabled = history.past.length === 0;
@@ -5243,6 +5264,10 @@
 
     if (isTouch && hasActiveMultiTouch()) {
       event.preventDefault();
+      if (pointerState.active && pointerState.tool !== 'pan') {
+        abortActivePointerInteraction({ commitHistory: false });
+        rollbackPendingHistory();
+      }
       if (!pointerState.active || pointerState.tool !== 'pan' || pointerState.panMode !== 'multiTouch') {
         abortActivePointerInteraction();
         startPanInteraction(event, { multiTouch: true });
