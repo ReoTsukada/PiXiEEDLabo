@@ -269,6 +269,35 @@
   const MEMORY_MONITOR_INTERVAL = 2000;
   const MEMORY_WARNING_DEFAULT = 250 * 1024 * 1024;
   const TIMELINE_CELL_SIZE = 32;
+  const TIMELINE_CELL_VARIANTS = {
+    corner: { fill: 'rgba(16, 22, 32, 0.94)', border: 'rgba(210, 220, 240, 0.45)' },
+    frameHeader: { fill: 'rgba(18, 26, 38, 0.9)', border: 'rgba(160, 172, 190, 0.45)' },
+    frameHeaderActive: { fill: 'rgba(88, 196, 255, 0.3)', border: 'rgba(88, 196, 255, 0.7)' },
+    layer: { fill: 'rgba(18, 26, 38, 0.9)', border: 'rgba(160, 172, 190, 0.45)' },
+    layerActive: { fill: 'rgba(88, 196, 255, 0.26)', border: 'rgba(88, 196, 255, 0.68)' },
+    layerPlaceholder: { fill: 'rgba(12, 16, 24, 0.6)', border: 'rgba(130, 142, 162, 0.45)' },
+    layerHidden: { fill: 'rgba(26, 32, 44, 0.7)', border: 'rgba(118, 128, 148, 0.45)' },
+    layerActiveHidden: { fill: 'rgba(70, 100, 132, 0.6)', border: 'rgba(118, 128, 148, 0.6)' },
+    body: { fill: 'rgba(12, 16, 24, 0.7)', border: 'rgba(96, 108, 128, 0.42)' },
+    bodyActiveRow: { fill: 'rgba(88, 196, 255, 0.18)', border: 'rgba(88, 196, 255, 0.55)' },
+    bodyActiveColumn: { fill: 'rgba(88, 196, 255, 0.16)', border: 'rgba(88, 196, 255, 0.5)' },
+    bodyActiveCell: { fill: 'rgba(88, 196, 255, 0.32)', border: 'rgba(88, 196, 255, 0.75)' },
+    bodyEmpty: { fill: 'rgba(9, 13, 19, 0.55)', border: 'rgba(112, 124, 146, 0.42)' },
+    bodyHidden: { fill: 'rgba(20, 26, 36, 0.62)', border: 'rgba(112, 124, 146, 0.46)' },
+  };
+  const TIMELINE_SLOT_VARIANTS = {
+    default: { fill: 'rgba(16, 22, 30, 0.78)', border: 'rgba(136, 148, 168, 0.55)' },
+    active: { fill: 'rgba(88, 196, 255, 0.38)', border: 'rgba(88, 196, 255, 0.75)' },
+    hidden: { fill: 'rgba(14, 18, 26, 0.55)', border: 'rgba(120, 130, 150, 0.45)' },
+    disabled: { fill: 'rgba(9, 13, 19, 0.48)', border: 'rgba(96, 108, 128, 0.4)' },
+  };
+  const TIMELINE_BUTTON_VARIANTS = {
+    add: { fill: 'rgba(88, 196, 255, 0.3)', border: 'rgba(88, 196, 255, 0.7)' },
+    remove: { fill: 'rgba(255, 107, 107, 0.32)', border: 'rgba(255, 130, 130, 0.68)' },
+    playback: { fill: 'rgba(120, 150, 190, 0.28)', border: 'rgba(184, 200, 224, 0.6)' },
+    playbackActive: { fill: 'rgba(88, 196, 255, 0.36)', border: 'rgba(88, 196, 255, 0.78)' },
+    stop: { fill: 'rgba(255, 156, 126, 0.32)', border: 'rgba(255, 181, 152, 0.72)' },
+  };
   let memoryMonitorHandle = null;
   let toolButtons = [];
   let renderScheduled = false;
@@ -4132,12 +4161,12 @@
     state.palette.forEach((color, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'palette-swatch';
+      button.className = 'palette-swatch pixel-frame';
       button.dataset.index = String(index);
-      button.style.backgroundColor = rgbaToCss(color);
       button.setAttribute('aria-label', `インデックス ${index}`);
       button.title = `${index}: ${rgbaToHex(color)}`;
       button.classList.toggle('is-active', index === state.activePaletteIndex);
+      applyPixelFrameBackground(button, color);
       button.addEventListener('click', () => setActivePaletteIndex(index));
       button.addEventListener('contextmenu', event => {
         event.preventDefault();
@@ -4503,6 +4532,7 @@
 
     renderFrameList();
     renderLayerList();
+    applyTimelineToolbarFrames();
   }
 
   function startPlayback() {
@@ -4546,6 +4576,109 @@
     if (dom.controls.stopAnimation) {
       dom.controls.stopAnimation.disabled = !isPlaying;
     }
+    applyTimelineToolbarFrames();
+  }
+
+  function applyTimelineToolbarFrames() {
+    const configs = [
+      { element: dom.controls.addLayer, variant: 'add' },
+      { element: dom.controls.removeLayer, variant: 'remove' },
+      { element: dom.controls.addFrame, variant: 'add' },
+      { element: dom.controls.removeFrame, variant: 'remove' },
+      { element: dom.controls.rewindAnimation, variant: 'playback' },
+      { element: dom.controls.playAnimation, variant: state.playback.isPlaying ? 'playbackActive' : 'playback' },
+      { element: dom.controls.stopAnimation, variant: state.playback.isPlaying ? 'stop' : 'stop' },
+      { element: dom.controls.forwardAnimation, variant: 'playback' },
+    ];
+    configs.forEach(({ element, variant }) => {
+      if (!element) return;
+      const colors = TIMELINE_BUTTON_VARIANTS[variant] || TIMELINE_BUTTON_VARIANTS.playback;
+      applyPixelFrameBackground(element, colors.fill, { borderColor: colors.border });
+    });
+  }
+
+  function getTimelineBodyVariant({ isEmpty, isActiveLayerRow, isActiveFrameColumn, isActiveCell, isHidden }) {
+    if (isEmpty) {
+      return 'bodyEmpty';
+    }
+    if (isActiveCell) {
+      return 'bodyActiveCell';
+    }
+    if (isHidden) {
+      return 'bodyHidden';
+    }
+    if (isActiveLayerRow && isActiveFrameColumn) {
+      return 'bodyActiveCell';
+    }
+    if (isActiveLayerRow) {
+      return 'bodyActiveRow';
+    }
+    if (isActiveFrameColumn) {
+      return 'bodyActiveColumn';
+    }
+    return 'body';
+  }
+
+  function applyTimelineCellFrame(element, variant) {
+    if (!element) return;
+    element.classList.add('pixel-frame');
+    const colors = TIMELINE_CELL_VARIANTS[variant] || TIMELINE_CELL_VARIANTS.body;
+    applyPixelFrameBackground(element, colors.fill, { borderColor: colors.border });
+  }
+
+  function applyTimelineSlotFrame(element, variant) {
+    if (!element) return;
+    element.classList.add('pixel-frame');
+    const colors = TIMELINE_SLOT_VARIANTS[variant] || TIMELINE_SLOT_VARIANTS.default;
+    applyPixelFrameBackground(element, colors.fill, { borderColor: colors.border });
+  }
+
+  function getLayerVisibilityForRow(rowIndex) {
+    for (let frameIndex = 0; frameIndex < state.frames.length; frameIndex += 1) {
+      const frame = state.frames[frameIndex];
+      const layerIndex = frame.layers.length - 1 - rowIndex;
+      if (layerIndex >= 0 && layerIndex < frame.layers.length) {
+        return Boolean(frame.layers[layerIndex]?.visible);
+      }
+    }
+    return true;
+  }
+
+  function setLayerVisibilityForRow(rowIndex, visible) {
+    let needsChange = false;
+    state.frames.forEach(frame => {
+      const layerIndex = frame.layers.length - 1 - rowIndex;
+      if (layerIndex >= 0 && layerIndex < frame.layers.length) {
+        const targetLayer = frame.layers[layerIndex];
+        if (targetLayer && targetLayer.visible !== visible) {
+          needsChange = true;
+        }
+      }
+    });
+    if (!needsChange) {
+      return;
+    }
+    beginHistory('layerVisibilityRow');
+    state.frames.forEach(frame => {
+      const layerIndex = frame.layers.length - 1 - rowIndex;
+      if (layerIndex >= 0 && layerIndex < frame.layers.length) {
+        const targetLayer = frame.layers[layerIndex];
+        if (targetLayer && targetLayer.visible !== visible) {
+          targetLayer.visible = visible;
+        }
+      }
+    });
+    markHistoryDirty();
+    scheduleSessionPersist();
+    renderTimelineMatrix();
+    requestRender();
+    requestOverlayRender();
+    commitHistory();
+  }
+
+  function toggleLayerVisibilityForRow(rowIndex) {
+    const current = getLayerVisibilityForRow(rowIndex);
+    setLayerVisibilityForRow(rowIndex, !current);
   }
 
   function renderTimelineMatrix() {
@@ -4592,26 +4725,31 @@
 
     const corner = document.createElement('div');
     corner.className = 'timeline-cell timeline-cell--corner';
+    corner.classList.add('pixel-frame');
     corner.style.gridColumn = '1';
     corner.style.gridRow = '1';
     corner.setAttribute('role', 'columnheader');
     corner.setAttribute('aria-label', 'タイムライン');
+    applyTimelineCellFrame(corner, 'corner');
     fragment.appendChild(corner);
 
     frames.forEach((frame, frameIndex) => {
       const col = frameIndex + 2;
       const header = document.createElement('div');
       header.className = 'timeline-cell timeline-cell--frame-header';
+      header.classList.add('pixel-frame');
       header.style.gridColumn = String(col);
       header.style.gridRow = '1';
       header.setAttribute('role', 'columnheader');
       if (frameIndex === activeFrameIndex) {
         header.classList.add('is-active-frame');
       }
+      const headerVariant = frameIndex === activeFrameIndex ? 'frameHeaderActive' : 'frameHeader';
+      applyTimelineCellFrame(header, headerVariant);
 
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'timeline-frame-button';
+      button.className = 'timeline-frame-button pixel-frame';
       const frameNumberMatch = String(frame.name).match(/(\d+)/);
       button.textContent = frameNumberMatch && frameNumberMatch[1] ? frameNumberMatch[1] : String(frameIndex + 1);
       button.addEventListener('click', () => {
@@ -4628,6 +4766,7 @@
       });
 
       header.appendChild(button);
+      applyTimelineSlotFrame(button, frameIndex === activeFrameIndex ? 'active' : 'default');
       fragment.appendChild(header);
     });
 
@@ -4637,9 +4776,12 @@
       const labelName = layerNames[rowIndex] || String(layerCount - rowIndex);
       const rowHeader = document.createElement('div');
       rowHeader.className = 'timeline-cell timeline-cell--layer';
+      rowHeader.classList.add('pixel-frame');
       rowHeader.style.gridColumn = '1';
       rowHeader.style.gridRow = String(row);
       rowHeader.setAttribute('role', 'rowheader');
+      rowHeader.dataset.layerRowIndex = String(rowIndex);
+      const rowVisibility = getLayerVisibilityForRow(rowIndex);
 
       if (rowIndex === activeLayerRow) {
         rowHeader.classList.add('is-active-layer');
@@ -4650,21 +4792,13 @@
         const visibilityToggle = document.createElement('button');
         visibilityToggle.type = 'button';
         visibilityToggle.className = 'timeline-visibility';
-        visibilityToggle.setAttribute('aria-pressed', String(layer.visible));
-        visibilityToggle.setAttribute('aria-label', layer.visible ? 'レイヤーを非表示' : 'レイヤーを表示');
-        visibilityToggle.textContent = layer.visible ? '●' : '○';
+        visibilityToggle.dataset.layerRowIndex = String(rowIndex);
+        visibilityToggle.setAttribute('aria-pressed', String(rowVisibility));
+        visibilityToggle.setAttribute('aria-label', rowVisibility ? 'レイヤーを非表示' : 'レイヤーを表示');
+        visibilityToggle.textContent = rowVisibility ? '●' : '○';
         visibilityToggle.addEventListener('click', event => {
           event.stopPropagation();
-          beginHistory('layerVisibility');
-          layer.visible = !layer.visible;
-          visibilityToggle.setAttribute('aria-pressed', String(layer.visible));
-          visibilityToggle.setAttribute('aria-label', layer.visible ? 'レイヤーを非表示' : 'レイヤーを表示');
-          visibilityToggle.textContent = layer.visible ? '●' : '○';
-          markHistoryDirty();
-          requestRender();
-          commitHistory();
-          scheduleSessionPersist();
-          renderTimelineMatrix();
+          toggleLayerVisibilityForRow(rowIndex);
         });
 
         const tag = document.createElement('button');
@@ -4685,12 +4819,20 @@
         rowHeader.setAttribute('aria-hidden', 'true');
       }
 
+      const layerVariant = rowHeader.classList.contains('is-placeholder')
+        ? 'layerPlaceholder'
+        : rowIndex === activeLayerRow
+          ? (rowVisibility ? 'layerActive' : 'layerActiveHidden')
+          : (rowVisibility ? 'layer' : 'layerHidden');
+      applyTimelineCellFrame(rowHeader, layerVariant);
+
       fragment.appendChild(rowHeader);
 
       frames.forEach((frame, frameIndex) => {
         const col = frameIndex + 2;
         const cell = document.createElement('div');
         cell.className = 'timeline-cell timeline-cell--body';
+        cell.classList.add('pixel-frame');
         cell.style.gridColumn = String(col);
         cell.style.gridRow = String(row);
         cell.setAttribute('role', 'gridcell');
@@ -4704,42 +4846,68 @@
 
         const frameLayers = reversedLayersByFrame[frameIndex];
         const targetLayer = frameLayers[rowIndex];
+        const isActiveLayerRow = rowIndex === activeLayerRow;
+        const isActiveFrameColumn = frameIndex === activeFrameIndex;
+        let isActiveCell = false;
+        let isEmptyCell = false;
+        let isHiddenCell = false;
+
         if (!targetLayer) {
+          isEmptyCell = true;
           cell.classList.add('is-empty');
           const placeholder = document.createElement('span');
           placeholder.className = 'timeline-slot is-disabled';
           placeholder.textContent = '—';
           placeholder.setAttribute('aria-hidden', 'true');
+          applyTimelineSlotFrame(placeholder, 'disabled');
           cell.appendChild(placeholder);
-          fragment.appendChild(cell);
-          return;
+        } else {
+          const slot = document.createElement('button');
+          slot.type = 'button';
+          slot.className = 'timeline-slot';
+          slot.setAttribute('aria-label', `${frame.name} / ${targetLayer.name}`);
+          if (!targetLayer.visible) {
+            slot.classList.add('is-hidden');
+            isHiddenCell = true;
+          }
+          if (frameIndex === activeFrameIndex && targetLayer.id === state.activeLayer) {
+            slot.classList.add('is-active');
+            cell.classList.add('is-active-cell');
+            isActiveCell = true;
+          }
+          slot.addEventListener('click', () => {
+            state.activeFrame = frameIndex;
+            state.activeLayer = targetLayer.id;
+            scheduleSessionPersist();
+            renderTimelineMatrix();
+            requestRender();
+            requestOverlayRender();
+          });
+
+          const marker = document.createElement('span');
+          marker.className = 'timeline-slot__marker';
+          marker.setAttribute('aria-hidden', 'true');
+          slot.appendChild(marker);
+
+          let slotVariant = 'default';
+          if (!targetLayer.visible) {
+            slotVariant = 'hidden';
+          }
+          if (slot.classList.contains('is-active')) {
+            slotVariant = 'active';
+          }
+          applyTimelineSlotFrame(slot, slotVariant);
+          cell.appendChild(slot);
         }
 
-        const slot = document.createElement('button');
-        slot.type = 'button';
-        slot.className = 'timeline-slot';
-        slot.setAttribute('aria-label', `${frame.name} / ${targetLayer.name}`);
-        if (!targetLayer.visible) {
-          slot.classList.add('is-hidden');
-        }
-        if (frameIndex === activeFrameIndex && targetLayer.id === state.activeLayer) {
-          slot.classList.add('is-active');
-          cell.classList.add('is-active-cell');
-        }
-        slot.addEventListener('click', () => {
-          state.activeFrame = frameIndex;
-          state.activeLayer = targetLayer.id;
-          scheduleSessionPersist();
-          renderTimelineMatrix();
-          requestRender();
-          requestOverlayRender();
+        const bodyVariant = getTimelineBodyVariant({
+          isEmpty: isEmptyCell,
+          isActiveLayerRow,
+          isActiveFrameColumn,
+          isActiveCell,
+          isHidden: isHiddenCell,
         });
-
-        const marker = document.createElement('span');
-        marker.className = 'timeline-slot__marker';
-        marker.setAttribute('aria-hidden', 'true');
-        slot.appendChild(marker);
-        cell.appendChild(slot);
+        applyTimelineCellFrame(cell, bodyVariant);
         fragment.appendChild(cell);
       });
     }
@@ -4976,7 +5144,48 @@
     if (event.pointerType !== 'touch') {
       return;
     }
-    activeTouchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    activeTouchPointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      isPrimary: event.isPrimary === true,
+    });
+    prunePrimaryTouchPointers(event.isPrimary ? event.pointerId : null);
+  }
+
+  function prunePrimaryTouchPointers(preferredPointerId = null) {
+    let primaryPointerIds = [];
+    activeTouchPointers.forEach((pointer, pointerId) => {
+      if (pointer?.isPrimary) {
+        primaryPointerIds.push(pointerId);
+      }
+    });
+    if (primaryPointerIds.length <= 1) {
+      return;
+    }
+    const fallbackId = primaryPointerIds[primaryPointerIds.length - 1];
+    const keepId = preferredPointerId && activeTouchPointers.get(preferredPointerId)?.isPrimary
+      ? preferredPointerId
+      : fallbackId;
+    primaryPointerIds.forEach(pointerId => {
+      if (pointerId !== keepId) {
+        activeTouchPointers.delete(pointerId);
+      }
+    });
+  }
+
+  function hasActiveMultiTouch({ requireNonPrimary = false } = {}) {
+    if (activeTouchPointers.size < TOUCH_PAN_MIN_POINTERS) {
+      return false;
+    }
+    if (!requireNonPrimary) {
+      return true;
+    }
+    for (const pointer of activeTouchPointers.values()) {
+      if (pointer && pointer.isPrimary === false) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function removeTouchPointer(event) {
@@ -5065,7 +5274,7 @@
       return;
     }
 
-    if (isTouch && activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS) {
+    if (isTouch && hasActiveMultiTouch({ requireNonPrimary: true })) {
       event.preventDefault();
       if (!pointerState.active || pointerState.tool !== 'pan' || pointerState.panMode !== 'multiTouch') {
         abortActivePointerInteraction();
@@ -5090,7 +5299,7 @@
     }
 
     if (activeTool === 'pan') {
-      startPanInteraction(event, { multiTouch: isTouch && activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS });
+      startPanInteraction(event, { multiTouch: isTouch && hasActiveMultiTouch({ requireNonPrimary: true }) });
       return;
     }
 
@@ -5259,7 +5468,7 @@
     const isMultiTouchPan = isPanTool && pointerState.panMode === 'multiTouch';
     if (isPanTool) {
       if (isMultiTouchPan) {
-        if (activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS) {
+        if (hasActiveMultiTouch()) {
           refreshTouchPanBaseline();
           return;
         }
@@ -6497,12 +6706,10 @@
   function updateColorTabSwatch() {
     const color = getActiveSwatchColor();
     if (!color) return;
-    const css = rgbaToCss(color);
-    const border = color.a >= 192 ? 'rgba(0, 0, 0, 0.35)' : 'rgba(255, 255, 255, 0.75)';
+    const borderColor = color.a >= 192 ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.75)';
     [dom.colorTabSwatch, dom.mobileColorTabSwatch].forEach(element => {
       if (!element) return;
-      element.style.backgroundColor = css;
-      element.style.borderColor = border;
+      applyPixelFrameBackground(element, color, { borderColor });
     });
   }
 
@@ -7139,6 +7346,51 @@
   function rgbaToCss({ r, g, b, a }) {
     return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
   }
+
+  function toCssColor(value) {
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (value && typeof value === 'object') {
+      const { r = 0, g = 0, b = 0, a = 255 } = value;
+      return rgbaToCss({ r, g, b, a });
+    }
+    return 'rgba(0, 0, 0, 0)';
+  }
+
+  function createPixelFrameImage(color, { borderColor = '#C8C8C8' } = {}) {
+    const colorCss = toCssColor(color);
+    const borderCss = toCssColor(borderColor);
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='21' height='21' shape-rendering='crispEdges'>` +
+      `<rect x='1' y='0' width='19' height='1' fill='${borderCss}' />` +
+      `<rect x='0' y='1' width='2' height='1' fill='${borderCss}' />` +
+      `<rect x='2' y='1' width='17' height='19' fill='${colorCss}' />` +
+      `<rect x='19' y='1' width='2' height='1' fill='${borderCss}' />` +
+      `<rect x='0' y='2' width='1' height='18' fill='${borderCss}' />` +
+      `<rect x='1' y='2' width='1' height='17' fill='${colorCss}' />` +
+      `<rect x='19' y='2' width='1' height='17' fill='${colorCss}' />` +
+      `<rect x='20' y='2' width='1' height='18' fill='${borderCss}' />` +
+      `<rect x='1' y='19' width='1' height='2' fill='${borderCss}' />` +
+      `<rect x='19' y='19' width='1' height='2' fill='${borderCss}' />` +
+      `<rect x='2' y='20' width='17' height='1' fill='${borderCss}' />` +
+      `</svg>`;
+    const encoded = encodeURIComponent(svg)
+      .replace(/%0A/g, '')
+      .replace(/%09/g, '');
+    return `url("data:image/svg+xml,${encoded}")`;
+  }
+
+  function applyPixelFrameBackground(element, color, options = {}) {
+    if (!element) return;
+    element.classList.add('pixel-frame');
+    element.style.setProperty('--pixel-frame-image', createPixelFrameImage(color, options));
+  }
+
+  window.pixelFrameUtils = Object.freeze({
+    createImage: createPixelFrameImage,
+    applyBackground: applyPixelFrameBackground,
+    toCssColor,
+  });
 
   function rgbaToHsv({ r, g, b }) {
     const rn = clamp(r, 0, 255) / 255;
