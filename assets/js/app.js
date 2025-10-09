@@ -16,6 +16,10 @@
     rightTabPanes: document.getElementById('rightRailPanes'),
     mobileDrawer: document.getElementById('mobileDrawer'),
     mobileTabs: Array.from(document.querySelectorAll('.mobile-tab')),
+    colorTabSwatch: document.getElementById('colorTabSwatch'),
+    mobileColorTabSwatch: document.getElementById('mobileColorTabSwatch'),
+    toolTabIcon: document.getElementById('toolTabIcon'),
+    mobileToolTabIcon: document.getElementById('mobileToolTabIcon'),
     mobilePanels: {
       tools: document.getElementById('mobilePanelTools'),
       color: document.getElementById('mobilePanelColor'),
@@ -66,11 +70,6 @@
       paletteWheel: /** @type {HTMLCanvasElement|null} */ (document.getElementById('paletteColorWheel')),
       paletteWheelCursor: document.getElementById('paletteWheelCursor'),
       palettePreview: document.getElementById('palettePreview'),
-      rgbColor: document.getElementById('rgbColor'),
-      rgbR: document.getElementById('rgbR'),
-      rgbG: document.getElementById('rgbG'),
-      rgbB: document.getElementById('rgbB'),
-      rgbA: document.getElementById('rgbA'),
       timelineMatrix: document.getElementById('timelineMatrix'),
       addLayer: document.getElementById('addLayer'),
       removeLayer: document.getElementById('removeLayer'),
@@ -83,6 +82,8 @@
       toggleChecker: document.getElementById('toggleChecker'),
       togglePixelPreview: document.getElementById('togglePixelPreview'),
       openDocument: document.getElementById('openDocument'),
+      exportPng: document.getElementById('exportPng'),
+      exportGif: document.getElementById('exportGif'),
       clearCanvas: document.getElementById('clearCanvas'),
       enableAutosave: document.getElementById('enableAutosave'),
       autosaveStatus: document.getElementById('autosaveStatus'),
@@ -206,8 +207,39 @@
   const brushOffsetCache = new Map();
 
   const rails = { leftCollapsed: false, rightCollapsed: window.innerWidth <= 900 };
+  const BACKGROUND_TILE_COLORS = Object.freeze({
+    dark: [
+      { r: 52, g: 56, b: 68, a: 255 },
+      { r: 28, g: 31, b: 39, a: 255 },
+    ],
+    light: [
+      { r: 255, g: 255, b: 255, a: 255 },
+      { r: 236, g: 236, b: 240, a: 255 },
+    ],
+    pink: [
+      { r: 255, g: 238, b: 245, a: 255 },
+      { r: 255, g: 213, b: 230, a: 255 },
+    ],
+  });
+  const TRANSPARENT_TILE_SIZE = 8;
+  const BRUSH_TOOLS = new Set(['pen', 'eraser']);
+  const FILL_TOOLS = new Set(['fill']);
+  const SHAPE_TOOLS = new Set(['line', 'curve', 'rect', 'rectFill', 'ellipse', 'ellipseFill']);
+  const SELECTION_TOOLS = new Set(['selectRect', 'selectLasso', 'selectSame']);
+  const TOOL_ICON_FALLBACK = {
+    selectRect: '□',
+    selectLasso: '⌁',
+    selectSame: '★',
+    line: '／',
+    curve: '∿',
+    rect: '▢',
+    rectFill: '▣',
+    ellipse: '◯',
+    ellipseFill: '⬤',
+  };
   const state = createInitialState();
   restoreSessionState();
+  state.colorMode = 'index';
   updateGridDecorations();
   const pointerState = createPointerState();
   if (canUseSessionStorage) {
@@ -936,9 +968,7 @@
     if (Object.prototype.hasOwnProperty.call(snapshot, 'brushOpacity')) {
       state.brushOpacity = snapshot.brushOpacity;
     }
-    if (Object.prototype.hasOwnProperty.call(snapshot, 'colorMode')) {
-      state.colorMode = snapshot.colorMode;
-    }
+    state.colorMode = 'index';
     state.palette = snapshot.palette.map(color => ({ ...color }));
     state.activePaletteIndex = snapshot.activePaletteIndex;
     state.activeRgb = { ...snapshot.activeRgb };
@@ -1056,6 +1086,15 @@
       return base;
     }
     return `${base}${ext}`;
+  }
+
+  function createExportFileName(extension, suffix = '') {
+    const normalized = normalizeDocumentName(state.documentName);
+    const sanitized = normalized.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+    const safeBase = sanitized || DEFAULT_DOCUMENT_NAME.replace(/\s+/g, '_');
+    const safeSuffix = suffix ? `_${suffix}` : '';
+    const normalizedExt = extension ? extension.replace(/^\.+/, '') : '';
+    return normalizedExt ? `${safeBase}${safeSuffix}.${normalizedExt}` : `${safeBase}${safeSuffix}`;
   }
 
   function beginHistory(label) {
@@ -1752,6 +1791,7 @@
     if (toolButtons.length) {
       setActiveTool(state.tool, toolButtons, { persist: false });
     }
+    updateColorTabSwatch();
     updateLeftTabUI();
     updateLeftTabVisibility();
     updateRightTabUI();
@@ -2450,7 +2490,7 @@
     const selectionBounds = validateBoundsObject(payload.selectionBounds);
     const activeTool = typeof payload.tool === 'string' ? payload.tool : state.tool;
     const activeRgb = normalizeColorValue(payload.activeRgb || state.activeRgb);
-    const colorMode = payload.colorMode === 'rgb' ? 'rgb' : 'index';
+    const colorMode = 'index';
     const activePaletteIndex = clamp(Math.round(Number(payload.activePaletteIndex) || 0), 0, palette.length - 1);
     const backgroundMode = payload.backgroundMode === 'light' || payload.backgroundMode === 'pink' ? payload.backgroundMode : 'dark';
     const activeToolGroup = TOOL_GROUPS[payload.activeToolGroup] ? payload.activeToolGroup : (TOOL_TO_GROUP[activeTool] || state.activeToolGroup);
@@ -2842,6 +2882,14 @@
       openDocumentDialog();
     });
 
+    dom.controls.exportPng?.addEventListener('click', () => {
+      exportProjectAsPng();
+    });
+
+    dom.controls.exportGif?.addEventListener('click', () => {
+      exportProjectAsGif();
+    });
+
     if (dom.newProject?.button) {
       dom.newProject.button.addEventListener('click', () => {
         openNewProjectDialog();
@@ -3084,22 +3132,13 @@
         requestOverlayRender();
       }
     }
+    updateToolTabIcon();
     if (persist) {
       scheduleSessionPersist();
     }
   }
 
   function setupPaletteEditor() {
-    dom.controls.colorMode.forEach(input => {
-      input.addEventListener('change', event => {
-        if (!event.target.checked) return;
-        state.colorMode = event.target.value;
-        document.getElementById('colorModeIndex')?.toggleAttribute('hidden', state.colorMode !== 'index');
-        document.getElementById('colorModeRgb')?.toggleAttribute('hidden', state.colorMode !== 'rgb');
-        scheduleSessionPersist();
-      });
-    });
-
     dom.controls.addPaletteColor?.addEventListener('click', () => {
       beginHistory('paletteAdd');
       const nextIndex = state.palette.length;
@@ -3147,29 +3186,9 @@
       }, 160));
     }
 
-    [dom.controls.rgbR, dom.controls.rgbG, dom.controls.rgbB, dom.controls.rgbA].forEach((input, idx) => {
-      input?.addEventListener('input', () => {
-        const value = clamp(Number(input.value), 0, 255);
-        if (idx === 0) state.activeRgb.r = value;
-        if (idx === 1) state.activeRgb.g = value;
-        if (idx === 2) state.activeRgb.b = value;
-        if (idx === 3) state.activeRgb.a = value;
-        dom.controls.rgbColor.value = rgbaToHex(state.activeRgb);
-      });
-    });
-
-    dom.controls.rgbColor?.addEventListener('input', () => {
-      const rgba = hexToRgba(dom.controls.rgbColor.value);
-      if (!rgba) return;
-      state.activeRgb = rgba;
-      dom.controls.rgbR.value = String(rgba.r);
-      dom.controls.rgbG.value = String(rgba.g);
-      dom.controls.rgbB.value = String(rgba.b);
-      dom.controls.rgbA.value = String(rgba.a);
-    });
-
     renderPalette();
     syncPaletteInputs();
+    updateToolTabIcon();
   }
 
   function reorderPalette(currentIndex, targetIndex) {
@@ -3220,6 +3239,7 @@
     updatePalettePreview();
     drawPaletteWheel();
     updatePaletteWheelCursor();
+    updateColorTabSwatch();
   }
 
   function renderPalette() {
@@ -3243,6 +3263,7 @@
       });
       container.appendChild(button);
     });
+    updateColorTabSwatch();
   }
 
   function removePaletteColor(index) {
@@ -3280,6 +3301,7 @@
     requestRender();
     requestOverlayRender();
     scheduleSessionPersist();
+    updateColorTabSwatch();
   }
 
   function handlePaletteSliderInput({ source = 'unknown' } = {}) {
@@ -3332,6 +3354,7 @@
       const highColor = hsvToRgba(paletteEditorState.hsv.h, paletteEditorState.hsv.s, 1);
       valueSlider.style.background = `linear-gradient(90deg, ${rgbaToCss(lowColor)} 0%, ${rgbaToCss(highColor)} 100%)`;
     }
+    updateColorTabSwatch();
   }
 
   function configurePaletteWheelCanvas() {
@@ -4223,6 +4246,7 @@
       if (dom.canvases.drawing) {
         dom.canvases.drawing.releasePointerCapture(event.pointerId);
       }
+      setActiveTool('pen');
       return;
     }
 
@@ -4791,39 +4815,19 @@
       return;
     }
 
-    if (state.colorMode === 'index') {
-      if (layer.indices[index] === state.activePaletteIndex) {
-        return;
-      }
-      layer.indices[index] = state.activePaletteIndex;
-      if (direct) {
-        direct[base] = 0;
-        direct[base + 1] = 0;
-        direct[base + 2] = 0;
-        direct[base + 3] = 0;
-      }
-      markHistoryDirty();
-      markDirtyPixel(x, y);
-    } else {
-      const writeDirect = direct || ensureLayerDirect(layer);
-      const target = {
-        r: writeDirect[base],
-        g: writeDirect[base + 1],
-        b: writeDirect[base + 2],
-        a: writeDirect[base + 3],
-      };
-      const blended = blendColors(target, state.activeRgb, state.brushOpacity);
-      if (layer.indices[index] === -1 && target.r === blended.r && target.g === blended.g && target.b === blended.b && target.a === blended.a) {
-        return;
-      }
-      layer.indices[index] = -1;
-      writeDirect[base] = blended.r;
-      writeDirect[base + 1] = blended.g;
-      writeDirect[base + 2] = blended.b;
-      writeDirect[base + 3] = blended.a;
-      markHistoryDirty();
-      markDirtyPixel(x, y);
+    const paletteIndex = clamp(state.activePaletteIndex, 0, state.palette.length - 1);
+    if (layer.indices[index] === paletteIndex) {
+      return;
     }
+    layer.indices[index] = paletteIndex;
+    if (direct) {
+      direct[base] = 0;
+      direct[base + 1] = 0;
+      direct[base + 2] = 0;
+      direct[base + 3] = 0;
+    }
+    markHistoryDirty();
+    markDirtyPixel(x, y);
   }
 
   function getBrushOffsets(size) {
@@ -4894,44 +4898,112 @@
   function drawEllipse(start, end, filled) {
     const layer = getActiveLayer();
     if (!layer) return;
-    const cx = (start.x + end.x) / 2;
-    const cy = (start.y + end.y) / 2;
-    const rx = Math.abs(end.x - start.x) / 2;
-    const ry = Math.abs(end.y - start.y) / 2;
+    const cx = Math.round((start.x + end.x) / 2);
+    const cy = Math.round((start.y + end.y) / 2);
+    const rx = Math.round(Math.abs(end.x - start.x) / 2);
+    const ry = Math.round(Math.abs(end.y - start.y) / 2);
     if (rx === 0 && ry === 0) {
-      stampBrush(layer, Math.round(cx), Math.round(cy));
+      stampBrush(layer, cx, cy);
       requestRender();
       return;
     }
+    drawEllipsePixels(cx, cy, rx, ry, filled, (x, y) => stampBrush(layer, x, y));
+    requestRender();
+  }
 
-    const minX = Math.floor(cx - rx);
-    const maxX = Math.ceil(cx + rx);
-    const minY = Math.floor(cy - ry);
-    const maxY = Math.ceil(cy + ry);
-    const denomX = rx ** 2 || 1;
-    const denomY = ry ** 2 || 1;
-    const threshold = Math.max(0.6, Math.min(rx, ry) <= 1 ? 1.2 : 0.6);
+  function drawEllipsePixels(cx, cy, rx, ry, filled, plotPixel) {
+    if (rx < 0 || ry < 0) return;
+    if (rx === 0 && ry === 0) {
+      plotPixel(cx, cy);
+      return;
+    }
+    if (rx === 0) {
+      for (let y = cy - ry; y <= cy + ry; y += 1) {
+        plotPixel(cx, y);
+      }
+      return;
+    }
+    if (ry === 0) {
+      for (let x = cx - rx; x <= cx + rx; x += 1) {
+        plotPixel(x, cy);
+      }
+      return;
+    }
 
-    for (let y = minY; y <= maxY; y += 1) {
-      for (let x = minX; x <= maxX; x += 1) {
-        const norm = ((x - cx) ** 2) / denomX + ((y - cy) ** 2) / denomY;
-        if (filled) {
-          if (norm <= 1) {
-            stampBrush(layer, x, y);
-          }
-        } else if (Math.abs(norm - 1) < threshold) {
-          stampBrush(layer, x, y);
-        }
+    const fillRanges = filled ? new Map() : null;
+    const rxSq = rx * rx;
+    const rySq = ry * ry;
+    let x = 0;
+    let y = ry;
+    let px = 0;
+    let py = 2 * rxSq * y;
+
+    const recordFillRange = (yRow, xValue) => {
+      if (!fillRanges) return;
+      const entry = fillRanges.get(yRow);
+      if (entry) {
+        entry.min = Math.min(entry.min, xValue);
+        entry.max = Math.max(entry.max, xValue);
+      } else {
+        fillRanges.set(yRow, { min: xValue, max: xValue });
+      }
+    };
+
+    const plotSymmetric = (offsetX, offsetY) => {
+      const coords = [
+        { x: cx + offsetX, y: cy + offsetY },
+        { x: cx - offsetX, y: cy + offsetY },
+        { x: cx + offsetX, y: cy - offsetY },
+        { x: cx - offsetX, y: cy - offsetY },
+      ];
+      coords.forEach(point => {
+        plotPixel(point.x, point.y);
+        recordFillRange(point.y, point.x);
+      });
+    };
+
+    let p1 = rySq - (rxSq * ry) + (0.25 * rxSq);
+    while (px < py) {
+      plotSymmetric(x, y);
+      x += 1;
+      px += 2 * rySq;
+      if (p1 < 0) {
+        p1 += rySq + px;
+      } else {
+        y -= 1;
+        py -= 2 * rxSq;
+        p1 += rySq + px - py;
       }
     }
-    requestRender();
+
+    let p2 = (rySq * (x + 0.5) ** 2) + (rxSq * (y - 1) ** 2) - (rxSq * rySq);
+    while (y >= 0) {
+      plotSymmetric(x, y);
+      y -= 1;
+      py -= 2 * rxSq;
+      if (p2 > 0) {
+        p2 += rxSq - py;
+      } else {
+        x += 1;
+        px += 2 * rySq;
+        p2 += rxSq - py + px;
+      }
+    }
+
+    if (fillRanges) {
+      fillRanges.forEach((range, row) => {
+        for (let col = range.min; col <= range.max; col += 1) {
+          plotPixel(col, row);
+        }
+      });
+    }
   }
 
   function floodFill(x, y) {
     const layer = getActiveLayer();
     if (!layer) return;
     const targetColor = sampleLayerColor(layer, x, y);
-    const replacement = state.colorMode === 'index' ? { type: 'index', index: state.activePaletteIndex } : { type: 'direct', color: { ...state.activeRgb } };
+    const replacement = { type: 'index', index: state.activePaletteIndex };
 
     if (colorsEqual(targetColor, replacement)) {
       return;
@@ -4961,26 +5033,19 @@
   function sampleColor(x, y) {
     const { color, mode, index } = sampleCompositeColor(x, y);
     if (!color) return;
-    if (mode === 'index') {
-      state.colorMode = 'index';
-      dom.controls.colorMode.forEach(input => {
-        input.checked = input.value === 'index';
-      });
+    if (mode === 'index' && typeof index === 'number' && index >= 0) {
       setActivePaletteIndex(index);
     } else {
-      state.colorMode = 'rgb';
-      dom.controls.colorMode.forEach(input => {
-        input.checked = input.value === 'rgb';
-      });
-      state.activeRgb = { ...color };
-      dom.controls.rgbR.value = String(color.r);
-      dom.controls.rgbG.value = String(color.g);
-      dom.controls.rgbB.value = String(color.b);
-      dom.controls.rgbA.value = String(color.a);
-      dom.controls.rgbColor.value = rgbaToHex(color);
-      document.getElementById('colorModeIndex')?.setAttribute('hidden', 'true');
-      document.getElementById('colorModeRgb')?.removeAttribute('hidden');
+      const normalized = normalizeColorValue(color);
+      const activeIndex = clamp(state.activePaletteIndex, 0, state.palette.length - 1);
+      if (state.palette[activeIndex]) {
+        Object.assign(state.palette[activeIndex], normalized);
+        applyPaletteChange();
+        renderPalette();
+      }
     }
+    state.colorMode = 'index';
+    updateColorTabSwatch();
   }
 
   function sampleCompositeColor(x, y) {
@@ -5013,6 +5078,41 @@
       }
     }
     return { color, mode, index };
+  }
+
+  function sampleCompositeColorExcludingLayer(x, y, excludedLayerId) {
+    const frame = getActiveFrame();
+    if (!frame) {
+      return null;
+    }
+    const idx = y * state.width + x;
+    for (let i = frame.layers.length - 1; i >= 0; i -= 1) {
+      const layer = frame.layers[i];
+      if (!layer.visible || layer.id === excludedLayerId) {
+        continue;
+      }
+      if (layer.indices[idx] >= 0) {
+        const paletteColor = state.palette[layer.indices[idx]];
+        if (paletteColor) {
+          const normalized = normalizeColorValue(paletteColor);
+          return normalized;
+        }
+      }
+      const direct = layer.direct instanceof Uint8ClampedArray ? layer.direct : null;
+      if (direct) {
+        const base = idx * 4;
+        const alpha = direct[base + 3];
+        if (alpha > 0) {
+          return {
+            r: direct[base],
+            g: direct[base + 1],
+            b: direct[base + 2],
+            a: alpha,
+          };
+        }
+      }
+    }
+    return null;
   }
 
   function sampleLayerColor(layer, x, y) {
@@ -5406,7 +5506,7 @@
     const activeTool = getActiveTool();
     if (state.showPixelGuides && focusPixel) {
       const overrideSize = activeTool === 'fill' ? 1 : undefined;
-      drawBrushCrosshair(focusPixel, overrideSize);
+      drawBrushPreview(focusPixel, activeTool, overrideSize);
     }
 
     if (ctx.overlay && !pointerState.active && activeTool === 'fill' && focusPixel) {
@@ -5444,26 +5544,204 @@
     }
   }
 
-  function drawBrushPreview(center) {
-    drawBrushCrosshair(center);
+  function getBackgroundTileColor(x, y) {
+    const tiles = BACKGROUND_TILE_COLORS[state.backgroundMode] || BACKGROUND_TILE_COLORS.dark;
+    const tileSize = TRANSPARENT_TILE_SIZE;
+    const parity = (Math.floor(x / tileSize) + Math.floor(y / tileSize)) & 1;
+    return tiles[parity] || tiles[0];
   }
 
-  function drawBrushCrosshair(center, sizeOverride) {
-    if (!center) return;
-    if (!ctx.overlay) return;
+  function getEraserPreviewColor(x, y) {
+    const activeLayer = getActiveLayer();
+    if (!activeLayer) {
+      return getBackgroundTileColor(x, y);
+    }
+    const color = sampleCompositeColorExcludingLayer(x, y, activeLayer.id);
+    if (color) {
+      return color;
+    }
+    return getBackgroundTileColor(x, y);
+  }
+
+  function resolveSampledColor(sample) {
+    if (!sample) {
+      return null;
+    }
+    if (sample.mode === 'index') {
+      const paletteColor = state.palette[sample.index];
+      if (paletteColor) {
+        return normalizeColorValue(paletteColor);
+      }
+      return null;
+    }
+    if (sample.color) {
+      return normalizeColorValue(sample.color);
+    }
+    return null;
+  }
+
+  function getActiveSwatchColor() {
+    const paletteColor = state.palette[state.activePaletteIndex];
+    if (paletteColor) {
+      return normalizeColorValue(paletteColor);
+    }
+    return { r: 255, g: 255, b: 255, a: 255 };
+  }
+
+  function updateColorTabSwatch() {
+    const color = getActiveSwatchColor();
+    if (!color) return;
+    const css = rgbaToCss(color);
+    const border = color.a >= 192 ? 'rgba(0, 0, 0, 0.35)' : 'rgba(255, 255, 255, 0.75)';
+    [dom.colorTabSwatch, dom.mobileColorTabSwatch].forEach(element => {
+      if (!element) return;
+      element.style.backgroundColor = css;
+      element.style.borderColor = border;
+    });
+  }
+
+  function getActiveToolIconNode() {
+    if (!toolButtons || !toolButtons.length) {
+      return null;
+    }
+    const activeTool = state.tool;
+    const button = toolButtons.find(btn => btn.dataset.tool === activeTool);
+    if (!button) {
+      return null;
+    }
+    const icon = button.querySelector('img, svg');
+    if (icon) {
+      return icon.cloneNode(true);
+    }
+    return null;
+  }
+
+  function updateToolTabIcon() {
+    const targets = [dom.toolTabIcon, dom.mobileToolTabIcon].filter(Boolean);
+    if (!targets.length) {
+      return;
+    }
+    const activeTool = state.tool;
+    const iconNode = getActiveToolIconNode();
+    targets.forEach(target => {
+      if (!target) return;
+      target.innerHTML = '';
+      if (iconNode) {
+        target.appendChild(iconNode.cloneNode(true));
+      } else {
+        const span = document.createElement('span');
+        span.textContent = TOOL_ICON_FALLBACK[activeTool] || activeTool?.slice(0, 1)?.toUpperCase() || '?';
+        span.style.fontSize = '12px';
+        span.style.lineHeight = '1';
+        span.style.fontWeight = '600';
+        target.appendChild(span);
+      }
+    });
+  }
+
+  function drawEyedropperPreview(center, selectionMask) {
+    const { width, height } = state;
+    if (center.x < 0 || center.y < 0 || center.x >= width || center.y >= height) {
+      return;
+    }
+    const idx = center.y * width + center.x;
+    if (selectionMask && selectionMask[idx] !== 1) {
+      return;
+    }
+    const sample = sampleCompositeColor(center.x, center.y);
+    let color = resolveSampledColor(sample);
+    if (!color) {
+      color = getBackgroundTileColor(center.x, center.y);
+    }
+    ctx.overlay.fillStyle = rgbaToCss(color);
+    ctx.overlay.fillRect(center.x, center.y, 1, 1);
+    ctx.overlay.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.overlay.lineWidth = 1;
+    ctx.overlay.strokeRect(center.x - 0.5, center.y - 0.5, 1, 1);
+  }
+
+  function drawBrushPreview(center, tool = getActiveTool(), sizeOverride) {
+    if (!center || !ctx.overlay) return;
     const { width, height } = state;
     if (width <= 0 || height <= 0) return;
     const selectionMask = state.selectionMask;
     const size = clamp(Math.round(sizeOverride || state.brushSize || 1), 1, 64);
+    if (SELECTION_TOOLS.has(tool)) {
+      return;
+    }
+
+    ctx.overlay.save();
+    if (tool === 'eyedropper') {
+      drawEyedropperPreview(center, selectionMask);
+      ctx.overlay.restore();
+      return;
+    }
+    if (BRUSH_TOOLS.has(tool)) {
+      const penColor = getActiveDrawColor(state.brushOpacity);
+      const resolver = tool === 'pen'
+        ? () => penColor
+        : (x, y) => getEraserPreviewColor(x, y);
+      drawFilledPreview(center, size, selectionMask, resolver);
+      ctx.overlay.restore();
+      return;
+    }
+
+    if (FILL_TOOLS.has(tool)) {
+      const pixels = getFillPreviewPixels(center.x, center.y);
+      if (pixels && pixels.length) {
+        const fillColor = rgbaToCss(getActiveDrawColor());
+        ctx.overlay.fillStyle = fillColor;
+        pixels.forEach(idx => {
+          const px = idx % width;
+          const py = Math.floor(idx / width);
+          ctx.overlay.fillRect(px, py, 1, 1);
+        });
+        ctx.overlay.restore();
+        return;
+      }
+    }
+
+    const color = getActiveDrawColor();
+    ctx.overlay.fillStyle = rgbaToCss(color);
+    drawFilledPreview(center, size, selectionMask, () => color);
+    ctx.overlay.restore();
+  }
+
+  function drawFilledPreview(center, size, selectionMask, colorResolver) {
+    const { width, height } = state;
     const halfDown = Math.floor(size / 2);
     const halfUp = Math.ceil(size / 2);
     const minX = clamp(center.x - halfDown, 0, width - 1);
     const maxX = clamp(center.x + halfUp - 1, 0, width - 1);
     const minY = clamp(center.y - halfDown, 0, height - 1);
     const maxY = clamp(center.y + halfUp - 1, 0, height - 1);
-    const color = getActiveDrawColor();
-    ctx.overlay.save();
-    ctx.overlay.fillStyle = rgbaToCss(color);
+    let lastKey = null;
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const idx = y * width + x;
+        if (selectionMask && selectionMask[idx] !== 1) {
+          continue;
+        }
+        const color = colorResolver ? colorResolver(x, y) : getActiveDrawColor();
+        if (!color) continue;
+        const key = `${color.r}-${color.g}-${color.b}-${color.a}`;
+        if (key !== lastKey) {
+          ctx.overlay.fillStyle = rgbaToCss(color);
+          lastKey = key;
+        }
+        ctx.overlay.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
+  function drawBrushCrosshair(center, size, selectionMask) {
+    const { width, height } = state;
+    const halfDown = Math.floor(size / 2);
+    const halfUp = Math.ceil(size / 2);
+    const minX = clamp(center.x - halfDown, 0, width - 1);
+    const maxX = clamp(center.x + halfUp - 1, 0, width - 1);
+    const minY = clamp(center.y - halfDown, 0, height - 1);
+    const maxY = clamp(center.y + halfUp - 1, 0, height - 1);
     const crossY = clamp(center.y, minY, maxY);
     for (let x = minX; x <= maxX; x += 1) {
       const idx = crossY * width + x;
@@ -5478,7 +5756,6 @@
         ctx.overlay.fillRect(crossX, y, 1, 1);
       }
     }
-    ctx.overlay.restore();
   }
 
   function computeFillPreview(x, y) {
@@ -5492,9 +5769,7 @@
       return [];
     }
     const targetColor = sampleLayerColor(layer, x, y);
-    const replacement = state.colorMode === 'index'
-      ? { type: 'index', index: state.activePaletteIndex }
-      : { type: 'direct', color: { ...state.activeRgb } };
+    const replacement = { type: 'index', index: state.activePaletteIndex };
     if (colorsEqual(targetColor, replacement)) {
       return [];
     }
@@ -5523,9 +5798,7 @@
     const frame = getActiveFrame();
     const layer = getActiveLayer();
     if (!frame || !layer) return null;
-    const colorKey = state.colorMode === 'index'
-      ? `index-${state.activePaletteIndex}-${JSON.stringify(state.palette[state.activePaletteIndex] || {})}`
-      : `rgb-${state.activeRgb.r}-${state.activeRgb.g}-${state.activeRgb.b}-${state.activeRgb.a}`;
+    const colorKey = `index-${state.activePaletteIndex}-${JSON.stringify(state.palette[state.activePaletteIndex] || {})}`;
     return `${frame.id}|${layer.id}|${state.width}x${state.height}|${x},${y}|${colorKey}`;
   }
 
@@ -5720,33 +5993,12 @@
         }
       }
     } else if (tool === 'ellipse' || tool === 'ellipseFill') {
-      const cx = (start.x + end.x) / 2;
-      const cy = (start.y + end.y) / 2;
-      const rx = Math.abs(end.x - start.x) / 2;
-      const ry = Math.abs(end.y - start.y) / 2;
-      if (rx === 0 && ry === 0) {
-        stamp(Math.round(cx), Math.round(cy));
-      } else {
-        const minX = Math.floor(cx - rx);
-        const maxX = Math.ceil(cx + rx);
-        const minY = Math.floor(cy - ry);
-        const maxY = Math.ceil(cy + ry);
-        const denomX = rx ** 2 || 1;
-        const denomY = ry ** 2 || 1;
-        const threshold = Math.max(0.6, Math.min(rx, ry) <= 1 ? 1.2 : 0.6);
-        for (let y = minY; y <= maxY; y += 1) {
-          for (let x = minX; x <= maxX; x += 1) {
-            const norm = ((x - cx) ** 2) / denomX + ((y - cy) ** 2) / denomY;
-            if (tool === 'ellipseFill') {
-              if (norm <= 1) {
-                stamp(x, y);
-              }
-            } else if (Math.abs(norm - 1) < threshold) {
-              stamp(x, y);
-            }
-          }
-        }
-      }
+      const cx = Math.round((start.x + end.x) / 2);
+      const cy = Math.round((start.y + end.y) / 2);
+      const rx = Math.round(Math.abs(end.x - start.x) / 2);
+      const ry = Math.round(Math.abs(end.y - start.y) / 2);
+      const filled = tool === 'ellipseFill';
+      drawEllipsePixels(cx, cy, rx, ry, filled, (x, y) => stamp(x, y));
     }
 
     ctx.overlay.restore();
@@ -5951,9 +6203,7 @@
     if (typeof payload.showChecker === 'boolean') {
       state.showChecker = payload.showChecker;
     }
-    if (typeof payload.colorMode === 'string') {
-      state.colorMode = payload.colorMode === 'rgb' ? 'rgb' : 'index';
-    }
+    state.colorMode = 'index';
     if (Number.isFinite(payload.paletteIndex)) {
       state.activePaletteIndex = clamp(Math.round(payload.paletteIndex), 0, state.palette.length - 1);
     }
@@ -6048,10 +6298,8 @@
     let baseColor;
     if (previewTool === 'eraser') {
       baseColor = { r: 255, g: 255, b: 255, a: 255 };
-    } else if (state.colorMode === 'index') {
-      baseColor = state.palette[state.activePaletteIndex];
     } else {
-      baseColor = state.activeRgb;
+      baseColor = state.palette[state.activePaletteIndex];
     }
     if (!baseColor) {
       baseColor = { r: 255, g: 255, b: 255, a: 255 };
