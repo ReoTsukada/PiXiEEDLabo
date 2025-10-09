@@ -10,11 +10,18 @@
   </head>
   <body>
     <div class="app" id="appRoot">
+      <div class="app-banner" id="appBanner" aria-label="バナー広告スペース"></div>
       <div class="layout" id="appLayout">
         <aside class="rail rail--left" id="leftRail" data-collapsed="false" aria-label="ツールとカラー設定">
           <div class="rail-tabs" id="leftRailTabs" role="tablist" aria-label="左パネル切替">
-            <button type="button" class="rail-tab is-active" data-left-tab="tools" role="tab" aria-selected="true" aria-controls="panelTools">ツール</button>
-            <button type="button" class="rail-tab" data-left-tab="color" role="tab" aria-selected="false" aria-controls="panelColor" tabindex="-1">カラー</button>
+            <button type="button" class="rail-tab is-active" data-left-tab="tools" role="tab" aria-selected="true" aria-controls="panelTools" aria-label="ツール">
+              <span class="tab-icon-container" id="toolTabIcon"></span>
+              <span class="sr-only">ツール</span>
+            </button>
+            <button type="button" class="rail-tab" id="leftTabColorButton" data-left-tab="color" role="tab" aria-selected="false" aria-controls="panelColor" tabindex="-1" aria-label="カラー">
+              <span class="tab-swatch" id="colorTabSwatch"></span>
+              <span class="sr-only">カラー</span>
+            </button>
           </div>
           <div class="rail-tabpanes" id="leftRailPanes"></div>
         </aside>
@@ -40,8 +47,14 @@
         </main>
         <aside class="rail rail--right" id="rightRail" data-collapsed="false" aria-label="フレーム、レイヤー、設定">
           <div class="rail-tabs" id="rightRailTabs" role="tablist" aria-label="右パネル切り替え">
-            <button type="button" class="rail-tab is-active" data-right-tab="frames" role="tab" aria-selected="true" aria-controls="panelFrames">レイヤー</button>
-            <button type="button" class="rail-tab" data-right-tab="settings" role="tab" aria-selected="false" aria-controls="panelSettings" tabindex="-1">設定</button>
+            <button type="button" class="rail-tab is-active" data-right-tab="frames" role="tab" aria-selected="true" aria-controls="panelFrames" aria-label="フレームとレイヤー">
+              <img src="assets/icons/menu-frame.png" alt="" class="tab-icon" />
+              <span class="sr-only">フレームとレイヤー</span>
+            </button>
+            <button type="button" class="rail-tab" data-right-tab="settings" role="tab" aria-selected="false" aria-controls="panelSettings" tabindex="-1" aria-label="設定">
+              <img src="assets/icons/menu-settings.svg" alt="" class="tab-icon" />
+              <span class="sr-only">設定</span>
+            </button>
           </div>
           <div class="rail-tabpanes" id="rightRailPanes"></div>
         </aside>
@@ -49,10 +62,22 @@
 
       <div class="mobile-drawer" id="mobileDrawer" hidden>
         <div class="mobile-tabs" role="tablist" aria-label="モバイル操作パネル">
-          <button type="button" class="mobile-tab is-active" id="mobileTabTools" data-mobile-tab="tools" role="tab" aria-controls="mobilePanelTools" aria-selected="true">ツール</button>
-          <button type="button" class="mobile-tab" id="mobileTabColor" data-mobile-tab="color" role="tab" aria-controls="mobilePanelColor" aria-selected="false" tabindex="-1">カラー</button>
-          <button type="button" class="mobile-tab" id="mobileTabFrames" data-mobile-tab="frames" role="tab" aria-controls="mobilePanelFrames" aria-selected="false" tabindex="-1">フレーム/レイヤー</button>
-          <button type="button" class="mobile-tab" id="mobileTabSettings" data-mobile-tab="settings" role="tab" aria-controls="mobilePanelSettings" aria-selected="false" tabindex="-1">設定</button>
+          <button type="button" class="mobile-tab is-active" id="mobileTabTools" data-mobile-tab="tools" role="tab" aria-controls="mobilePanelTools" aria-selected="true" aria-label="ツール">
+            <span class="tab-icon-container" id="mobileToolTabIcon"></span>
+            <span class="sr-only">ツール</span>
+          </button>
+          <button type="button" class="mobile-tab" id="mobileTabColor" data-mobile-tab="color" role="tab" aria-controls="mobilePanelColor" aria-selected="false" tabindex="-1" aria-label="カラー">
+            <span class="tab-swatch" id="mobileColorTabSwatch"></span>
+            <span class="sr-only">カラー</span>
+          </button>
+          <button type="button" class="mobile-tab" id="mobileTabFrames" data-mobile-tab="frames" role="tab" aria-controls="mobilePanelFrames" aria-selected="false" tabindex="-1" aria-label="フレームとレイヤー">
+            <img src="assets/icons/menu-frame.png" alt="" class="tab-icon" />
+            <span class="sr-only">フレームとレイヤー</span>
+          </button>
+          <button type="button" class="mobile-tab" id="mobileTabSettings" data-mobile-tab="settings" role="tab" aria-controls="mobilePanelSettings" aria-selected="false" tabindex="-1" aria-label="設定">
+            <img src="assets/icons/menu-settings.svg" alt="" class="tab-icon" />
+            <span class="sr-only">設定</span>
+          </button>
         </div>
         <div class="mobile-panels" id="mobilePanels">
           <div class="mobile-panel is-active" id="mobilePanelTools" role="tabpanel" aria-labelledby="mobileTabTools"></div>
@@ -85,27 +110,27 @@
               <span>消しゴム</span>
             </button>
             <button type="button" class="tool-button" data-tool="line" data-tool-group="shape" aria-pressed="false">
-              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><line x1="4" y1="28" x2="28" y2="4" stroke="currentColor" stroke-width="4" stroke-linecap="round" /></svg>
+              <img src="assets/icons/tool-line.svg" alt="直線" width="32" height="32" />
               <span>直線</span>
             </button>
             <button type="button" class="tool-button" data-tool="curve" data-tool-group="shape" aria-pressed="false">
-              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><path d="M4 24c6-10 10-16 24-16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" /></svg>
+              <img src="assets/icons/tool-curve.svg" alt="曲線" width="32" height="32" />
               <span>曲線</span>
             </button>
             <button type="button" class="tool-button" data-tool="rect" data-tool-group="shape" aria-pressed="false">
-              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><rect x="6" y="6" width="20" height="20" fill="none" stroke="currentColor" stroke-width="4" rx="2" /></svg>
+              <img src="assets/icons/tool-rect.svg" alt="四角" width="32" height="32" />
               <span>四角</span>
             </button>
             <button type="button" class="tool-button" data-tool="rectFill" data-tool-group="shape" aria-pressed="false">
-              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><rect x="6" y="6" width="20" height="20" fill="currentColor" rx="2" /></svg>
+              <img src="assets/icons/tool-rect-fill.svg" alt="塗り四角" width="32" height="32" />
               <span>塗り四角</span>
             </button>
             <button type="button" class="tool-button" data-tool="ellipse" data-tool-group="shape" aria-pressed="false">
-              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="4" /></svg>
+              <img src="assets/icons/tool-ellipse.svg" alt="丸" width="32" height="32" />
               <span>丸</span>
             </button>
             <button type="button" class="tool-button" data-tool="ellipseFill" data-tool-group="shape" aria-pressed="false">
-              <svg class="tool-icon" viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false"><circle cx="16" cy="16" r="10" fill="currentColor" /></svg>
+              <img src="assets/icons/tool-ellipse-fill.svg" alt="塗り丸" width="32" height="32" />
               <span>塗り丸</span>
             </button>
             <button type="button" class="tool-button" data-tool="fill" data-tool-group="fill" aria-pressed="false">
@@ -142,11 +167,6 @@
 
       <section class="panel-section" id="panelColor" data-section="color">
         <div class="panel-section__body">
-          <fieldset class="field field--inline" role="radiogroup" aria-label="カラーモード">
-            <legend>モード</legend>
-            <label><input type="radio" name="colorMode" value="index" checked />インデックス</label>
-            <label><input type="radio" name="colorMode" value="rgb" />RGB</label>
-          </fieldset>
           <div class="color-mode color-mode--index" id="colorModeIndex">
             <div class="palette-header">
               <span>パレット</span>
@@ -186,30 +206,6 @@
               </div>
             </div>
           </div>
-          <div class="color-mode color-mode--rgb" id="colorModeRgb" hidden>
-            <label class="field">
-              <span>色</span>
-              <input type="color" id="rgbColor" value="#58c4ff" />
-            </label>
-            <div class="palette-rgb-fields">
-              <label class="field field--tiny">
-                <span>R</span>
-                <input type="number" id="rgbR" min="0" max="255" value="88" />
-              </label>
-              <label class="field field--tiny">
-                <span>G</span>
-                <input type="number" id="rgbG" min="0" max="255" value="196" />
-              </label>
-              <label class="field field--tiny">
-                <span>B</span>
-                <input type="number" id="rgbB" min="0" max="255" value="255" />
-              </label>
-              <label class="field field--tiny">
-                <span>A</span>
-                <input type="number" id="rgbA" min="0" max="255" value="255" />
-              </label>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -232,12 +228,19 @@
               <div class="timeline-matrix" id="timelineMatrix" role="grid" aria-label="フレームとレイヤーの一覧"></div>
             </div>
             <div class="timeline-footer">
-              <div class="timeline" role="group" aria-label="アニメーション制御">
-                <button type="button" class="chip" id="playAnimation">▶</button>
+              <div class="timeline-playback" role="group" aria-label="再生ボタン群">
+                <button type="button" class="chip" id="rewindAnimation" aria-label="最初のフレームへ">⏮</button>
+                <button type="button" class="chip" id="playAnimation" aria-label="再生">▶</button>
+                <button type="button" class="chip" id="stopAnimation" aria-label="停止">■</button>
+                <button type="button" class="chip" id="forwardAnimation" aria-label="次のフレームへ">⏭</button>
+              </div>
+              <div class="timeline-fps" role="group" aria-label="フレームレート設定">
                 <label class="field field--tiny timeline-fps-control">
                   <span>fps</span>
                   <input type="number" id="animationFps" min="1" max="60" value="12" />
                 </label>
+                <span class="timeline-fps-hint" id="animationFpsMs">83ms</span>
+                <button type="button" class="chip" id="applyFpsAll" aria-label="全フレームに現在の fps を適用">全体適用</button>
               </div>
             </div>
           </div>
@@ -294,6 +297,7 @@
           </div>
           <button type="button" class="button" id="newProject">新規作成</button>
           <button type="button" class="button" id="openDocument">ファイルを開く</button>
+          <button type="button" class="button" id="exportProject">エクスポート</button>
           <button type="button" class="button" id="clearCanvas">キャンバスをクリア</button>
           <button type="button" class="button" id="enableAutosave">ローカルに自動保存</button>
           <p class="help-text" id="autosaveStatus" aria-live="polite"></p>
@@ -304,6 +308,27 @@
         </div>
       </section>
     </div>
+
+    <dialog class="modal" id="exportDialog" aria-labelledby="exportDialogTitle">
+      <form class="modal__form" id="exportDialogForm" method="dialog">
+        <header class="modal__header">
+          <h2 class="modal__title" id="exportDialogTitle">書き出し形式</h2>
+        </header>
+        <div class="modal__body">
+          <div class="field field--list">
+            <button type="button" class="button button--primary" id="confirmExportPng">PNG（スプライトシート）</button>
+            <p class="help-text">全フレームをグリッドに並べた PNG を保存します</p>
+          </div>
+          <div class="field field--list">
+            <button type="button" class="button button--primary" id="confirmExportGif">GIF（アニメーション）</button>
+            <p class="help-text">フレーム時間を維持したアニメーション GIF を保存します</p>
+          </div>
+        </div>
+        <footer class="modal__footer">
+          <button type="button" class="button button--ghost" id="cancelExport">キャンセル</button>
+        </footer>
+      </form>
+    </dialog>
 
     <dialog class="modal" id="newProjectDialog" aria-labelledby="newProjectTitle">
       <form class="modal__form" id="newProjectForm" method="dialog">
