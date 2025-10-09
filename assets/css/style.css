@@ -52,11 +52,64 @@ button {
   background: none;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tab-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
+}
+
+.tab-icon-container {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.35);
+}
+
 .app {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+}
+
+.app-banner {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(13, 17, 24, 0.9);
+  color: var(--fg-muted);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.app-banner__placeholder {
+  font-size: 0.78rem;
 }
 
 .layout {
@@ -100,6 +153,10 @@ button {
   font-weight: 600;
   letter-spacing: 0.02em;
   transition: background 160ms ease, color 160ms ease, border 160ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .rail-tab:hover {
@@ -659,7 +716,7 @@ button {
 .palette-hsv {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px;
   align-items: flex-start;
 }
 
@@ -698,7 +755,11 @@ button {
   width: min(150px, 32vw);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+}
+
+.palette-sliders .field {
+  margin-bottom: 6px;
 }
 
 .palette-preview {
@@ -735,16 +796,6 @@ button {
   transform: translateY(-50%);
   font-size: 0.78rem;
   color: var(--fg-muted);
-}
-
-.palette-rgb-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.color-mode--rgb .palette-rgb-fields {
-  margin-top: 8px;
 }
 
 .timeline-card {
@@ -1011,11 +1062,31 @@ button {
 
 .timeline-footer {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.timeline-playback {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(36px, 1fr));
+  gap: 6px;
+}
+
+.timeline-fps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 6px;
+  align-items: center;
 }
 
 .timeline-fps-control {
-  min-width: 80px;
+  min-width: 72px;
+}
+
+.timeline-fps-hint {
+  font-size: 0.875rem;
+  opacity: 0.8;
+  justify-self: start;
 }
 .list-actions {
   display: inline-flex;
@@ -1049,6 +1120,16 @@ button {
 .button:hover {
   background: rgba(88, 196, 255, 0.24);
   border-color: rgba(88, 196, 255, 0.4);
+}
+
+#clearCanvas {
+  background: rgba(255, 107, 107, 0.22);
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
+#clearCanvas:hover {
+  background: rgba(255, 107, 107, 0.32);
+  border-color: rgba(255, 107, 107, 0.52);
 }
 
 .button--ghost {
@@ -1170,11 +1251,14 @@ button {
 }
 
 .mobile-tab {
-  padding: 12px 8px;
+  padding: 10px 6px;
   color: var(--fg-muted);
   border: none;
   background: transparent;
   border-bottom: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .mobile-tab.is-active {
@@ -1228,6 +1312,11 @@ button {
 }
 
 @media (max-width: 900px) and (orientation: portrait) {
+  :root {
+    --mobile-banner-height: 48px;
+    --mobile-drawer-height: 38vh;
+    --mobile-stage-padding: 8px;
+  }
   body {
     min-height: 100vh;
     overflow: hidden;
@@ -1237,12 +1326,16 @@ button {
     height: 100vh;
     overflow: hidden;
   }
+  .app-banner {
+    display: flex;
+    min-height: var(--mobile-banner-height);
+  }
   .layout {
     display: flex;
     flex-direction: column;
     flex: none;
-    height: 50vh;
-    max-height: 50vh;
+    height: calc(100vh - var(--mobile-banner-height) - var(--mobile-drawer-height));
+    max-height: calc(100vh - var(--mobile-banner-height) - var(--mobile-drawer-height));
     overflow: hidden;
   }
   .rail--left,
@@ -1255,16 +1348,23 @@ button {
     flex: 1 1 auto;
     min-height: 0;
     height: 100%;
-    padding: 12px;
+    padding: var(--mobile-stage-padding);
     width: 100%;
     overflow: hidden;
     contain: layout paint size;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .stage__canvas {
-    height: 100%;
-    max-height: 100%;
+    aspect-ratio: 1 / 1;
     border-radius: 0;
-    width: 100%;
+    width: min(100%, calc(100vh - var(--mobile-banner-height) - var(--mobile-drawer-height) - (var(--mobile-stage-padding) * 2)));
+    max-height: calc(100vh - var(--mobile-banner-height) - var(--mobile-drawer-height) - (var(--mobile-stage-padding) * 2));
+    max-width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .canvas-stack {
     max-width: none;
@@ -1273,8 +1373,8 @@ button {
   .mobile-drawer {
     display: grid !important;
     flex: none;
-    height: 50vh;
-    max-height: 50vh;
+    height: var(--mobile-drawer-height);
+    max-height: var(--mobile-drawer-height);
     min-height: 0;
     overflow: hidden;
     border-radius: 0;
@@ -1283,6 +1383,7 @@ button {
   .mobile-panels {
     height: 100%;
     overflow: hidden;
+    padding: 10px;
   }
   .mobile-panel.is-active {
     display: block;
