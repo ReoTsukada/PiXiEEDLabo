@@ -80,12 +80,44 @@ button {
   justify-content: center;
 }
 
+.pixel-frame {
+  --pixel-frame-image: url('../icons/color.svg');
+  background-image: var(--pixel-frame-image);
+  background-size: 100% 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.pixel-button {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.86rem;
+  line-height: 1;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  background: none;
+  transition: transform 120ms ease;
+}
+
+.pixel-button:active {
+  transform: scale(0.94);
+}
+
+.pixel-button:focus-visible {
+  outline: 2px solid rgba(88, 196, 255, 0.7);
+  outline-offset: 2px;
+}
+
 .tab-swatch {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.35);
+  border: none;
+  border-radius: 0;
 }
 
 .app {
@@ -681,10 +713,10 @@ button {
   position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
-  border-radius: 12px;
-  border: 2px solid transparent;
+  border: none;
   cursor: pointer;
-  overflow: hidden;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
+  transition: transform 120ms ease, filter 120ms ease;
 }
 
 .palette-swatch::after {
@@ -694,14 +726,27 @@ button {
   right: 6px;
   font-size: 0.7rem;
   color: #0d0f14;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.85);
   border-radius: 999px;
   padding: 2px 6px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.palette-swatch:focus-visible {
+  outline: 2px solid rgba(88, 196, 255, 0.75);
+  outline-offset: 3px;
+}
+
+.palette-swatch:hover {
+  transform: translateY(-1px) scale(1.02);
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.36));
 }
 
 .palette-swatch.is-active {
-  border-color: rgba(88, 196, 255, 0.8);
-  box-shadow: 0 0 0 2px rgba(88, 196, 255, 0.2);
+  filter: drop-shadow(0 10px 20px rgba(88, 196, 255, 0.35));
+  outline: 2px solid rgba(88, 196, 255, 0.55);
+  outline-offset: 2px;
 }
 
 .palette-editor {
@@ -851,9 +896,6 @@ button {
   justify-content: center;
   gap: 4px;
   padding: 2px;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(12, 16, 22, 0.52);
   min-width: var(--timeline-cell-size);
   min-height: var(--timeline-cell-size);
   max-width: var(--timeline-cell-size);
@@ -864,7 +906,6 @@ button {
 .timeline-cell--frame-header {
   position: sticky;
   top: 0;
-  background: rgba(15, 21, 30, 0.92);
   backdrop-filter: blur(6px);
   z-index: 4;
   justify-content: center;
@@ -878,36 +919,14 @@ button {
 .timeline-cell--layer {
   position: sticky;
   left: 0;
-  background: rgba(15, 21, 30, 0.92);
   backdrop-filter: blur(6px);
   z-index: 3;
   justify-content: space-between;
   padding: 0 4px;
 }
 
-.timeline-cell--body {
-  background: rgba(12, 16, 22, 0.58);
-}
-
-.timeline-cell--body.is-active-layer-row {
-  background: rgba(88, 196, 255, 0.14);
-}
-
-.timeline-cell--body.is-active-frame-column {
-  background: rgba(88, 196, 255, 0.1);
-}
-
-.timeline-cell--body.is-active-layer-row.is-active-frame-column {
-  background: rgba(88, 196, 255, 0.18);
-}
-
-.timeline-cell--body.is-active-cell {
-  box-shadow: inset 0 0 0 2px rgba(88, 196, 255, 0.5);
-}
-
 .timeline-cell--layer.is-active-layer {
   box-shadow: inset 3px 0 0 rgba(88, 196, 255, 0.7);
-  background: rgba(18, 26, 36, 0.94);
 }
 
 .timeline-cell--layer.is-placeholder {
@@ -972,27 +991,22 @@ button {
 
 .timeline-cell--frame-header.is-active-frame {
   box-shadow: inset 0 -3px 0 rgba(88, 196, 255, 0.7);
-  background: rgba(18, 26, 36, 0.94);
 }
 
 .timeline-frame-button {
   width: 100%;
   height: 100%;
   padding: 0;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
+  border-radius: 4px;
+  border: none;
+  background: none;
   color: inherit;
   text-align: center;
   font-size: 0.78rem;
-  transition: background 140ms ease, border 140ms ease;
+  transition: transform 140ms ease;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.timeline-frame-button:hover {
-  background: rgba(88, 196, 255, 0.12);
 }
 
 .timeline-frame-button:focus-visible {
@@ -1000,25 +1014,16 @@ button {
   outline-offset: 2px;
 }
 
-.timeline-cell--frame-header.is-active-frame .timeline-frame-button {
-  border-color: rgba(88, 196, 255, 0.38);
-  background: rgba(88, 196, 255, 0.2);
-}
-
 .timeline-slot {
   width: 100%;
   height: 100%;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(16, 22, 30, 0.65);
+  border-radius: 4px;
+  border: none;
+  background: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: border 140ms ease, transform 140ms ease, background 140ms ease;
-}
-
-.timeline-slot:hover {
-  border-color: rgba(88, 196, 255, 0.4);
+  transition: transform 140ms ease;
 }
 
 .timeline-slot:focus-visible {
@@ -1026,17 +1031,12 @@ button {
   outline-offset: 2px;
 }
 
-.timeline-slot.is-active {
-  border-color: rgba(88, 196, 255, 0.8);
-  background: rgba(88, 196, 255, 0.22);
+.timeline-slot.is-hidden {
+  opacity: 0.55;
 }
 
 .timeline-slot.is-active .timeline-slot__marker {
-  transform: scale(1.3);
-}
-
-.timeline-slot.is-hidden {
-  opacity: 0.55;
+  transform: scale(1.2);
 }
 
 .timeline-slot.is-disabled {
@@ -1054,10 +1054,6 @@ button {
 
 .timeline-slot.is-hidden .timeline-slot__marker {
   background: rgba(125, 132, 150, 0.45);
-}
-
-.timeline-cell.is-empty {
-  background: rgba(9, 13, 19, 0.4);
 }
 
 .timeline-footer {
