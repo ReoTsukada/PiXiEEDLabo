@@ -71,8 +71,7 @@
       rgbG: document.getElementById('rgbG'),
       rgbB: document.getElementById('rgbB'),
       rgbA: document.getElementById('rgbA'),
-      layerList: document.getElementById('layerList'),
-      frameList: document.getElementById('frameList'),
+      timelineMatrix: document.getElementById('timelineMatrix'),
       addLayer: document.getElementById('addLayer'),
       removeLayer: document.getElementById('removeLayer'),
       addFrame: document.getElementById('addFrame'),
@@ -226,6 +225,7 @@
   const HISTORY_DRAW_TOOLS = new Set(['pen', 'eraser', 'line', 'curve', 'rect', 'rectFill', 'ellipse', 'ellipseFill', 'fill']);
   const MEMORY_MONITOR_INTERVAL = 2000;
   const MEMORY_WARNING_DEFAULT = 250 * 1024 * 1024;
+  const TIMELINE_CELL_SIZE = 32;
   let memoryMonitorHandle = null;
   let toolButtons = [];
   let renderScheduled = false;
@@ -354,9 +354,14 @@
       selectionClearedOnDown: false,
       startClient: null,
       panOrigin: { x: 0, y: 0 },
+      panMode: null,
+      touchPanStart: null,
       curveHandle: null,
     };
   }
+
+  const TOUCH_PAN_MIN_POINTERS = 2;
+  const activeTouchPointers = new Map();
 
   function makeHistorySnapshot({ includeUiState = true, includeSelection = true, clonePixelData = true } = {}) {
     const snapshot = {
@@ -1258,6 +1263,7 @@
     if (!curveBuilder) return;
     curveBuilder = null;
     pointerState.curveHandle = null;
+    hoverPixel = null;
     pointerState.preview = null;
     pointerState.tool = null;
     if (history.pending && history.pending.label === 'curve' && !history.pending.dirty) {
@@ -2955,6 +2961,8 @@
     setActiveTool(state.tool, toolButtons, { persist: false });
 
     dom.canvases.drawing.addEventListener('pointerdown', handlePointerDown);
+    dom.canvases.drawing.addEventListener('pointercancel', handlePointerCancel);
+    window.addEventListener('pointercancel', handlePointerCancel);
     dom.canvases.drawing.addEventListener('pointermove', event => {
       if (pointerState.active) return;
       const awaitingLineEnd = curveBuilder && curveBuilder.stage === 'line' && curveBuilder.awaitingEndPoint && curveBuilder.start;
@@ -3474,15 +3482,22 @@
 
   function setupFramesAndLayers() {
     dom.controls.addLayer?.addEventListener('click', () => {
-      const frame = getActiveFrame();
-      if (!frame) return;
+      const activeFrame = getActiveFrame();
+      if (!activeFrame) return;
       beginHistory('addLayer');
-      const layerCount = frame.layers.length + 1;
-      const layer = createLayer(`レイヤー ${layerCount}`, state.width, state.height);
-      frame.layers.splice(getActiveLayerIndex() + 1, 0, layer);
-      state.activeLayer = layer.id;
+      const insertIndex = clamp(getActiveLayerIndex() + 1, 0, Number.MAX_SAFE_INTEGER);
+      state.frames.forEach((frame, frameIndex) => {
+        const targetIndex = Math.min(insertIndex, frame.layers.length);
+        const name = `レイヤー ${frame.layers.length + 1}`;
+        const newLayer = createLayer(name, state.width, state.height);
+        frame.layers.splice(targetIndex, 0, newLayer);
+        if (frameIndex === state.activeFrame) {
+          state.activeLayer = newLayer.id;
+        }
+      });
       markHistoryDirty();
       scheduleSessionPersist();
+      renderFrameList();
       renderLayerList();
       requestRender();
       requestOverlayRender();
@@ -3490,15 +3505,21 @@
     });
 
     dom.controls.removeLayer?.addEventListener('click', () => {
-      const frame = getActiveFrame();
-      if (!frame || frame.layers.length <= 1) return;
+      if (!state.frames.every(frame => frame.layers.length > 1)) {
+        return;
+      }
       beginHistory('removeLayer');
-      const index = getActiveLayerIndex();
-      frame.layers.splice(index, 1);
-      const nextIndex = clamp(index - 1, 0, frame.layers.length - 1);
-      state.activeLayer = frame.layers[nextIndex].id;
+      const removeIndex = clamp(getActiveLayerIndex(), 0, Number.MAX_SAFE_INTEGER);
+      state.frames.forEach(frame => {
+        const targetIndex = Math.min(removeIndex, frame.layers.length - 1);
+        frame.layers.splice(targetIndex, 1);
+      });
+      const activeFrame = getActiveFrame();
+      const nextIndex = clamp(removeIndex - 1, 0, activeFrame.layers.length - 1);
+      state.activeLayer = activeFrame.layers[nextIndex].id;
       markHistoryDirty();
       scheduleSessionPersist();
+      renderFrameList();
       renderLayerList();
       requestRender();
       requestOverlayRender();
@@ -3593,79 +3614,218 @@
     playbackHandle = requestAnimationFrame(stepPlayback);
   }
 
-  function renderFrameList() {
-    const list = dom.controls.frameList;
-    if (!list) return;
-    list.innerHTML = '';
-    state.frames.forEach((frame, index) => {
-      const item = document.createElement('li');
-      item.className = 'item-row';
-      item.classList.toggle('is-active', index === state.activeFrame);
-      item.textContent = frame.name;
-      item.addEventListener('click', () => {
-        state.activeFrame = index;
-        const activeLayer = frame.layers[frame.layers.length - 1];
-        state.activeLayer = activeLayer.id;
-        scheduleSessionPersist();
-        renderFrameList();
-        renderLayerList();
-        requestRender();
-      });
-      list.appendChild(item);
+  function renderTimelineMatrix() {
+    const container = dom.controls.timelineMatrix;
+    if (!container) return;
+
+    const frames = state.frames;
+    const frameCount = frames.length;
+    if (!frameCount) {
+      container.innerHTML = '';
+      return;
+    }
+
+    const activeFrameIndex = clamp(state.activeFrame, 0, frameCount - 1);
+    state.activeFrame = activeFrameIndex;
+
+    const reversedLayersByFrame = frames.map(frame => frame.layers.slice().reverse());
+    const activeLayers = reversedLayersByFrame[activeFrameIndex];
+    const layerNames = activeLayers.map((layer, idx) => {
+      const parts = String(layer.name).match(/(\d+)/);
+      if (parts && parts[1]) {
+        return parts[1];
+      }
+      return String(activeLayers.length - idx);
     });
+    const maxLayerCount = reversedLayersByFrame.reduce((max, layers) => Math.max(max, layers.length), 0);
+    const layerCount = Math.max(maxLayerCount, 1);
+
+    let activeLayerRow = activeLayers.findIndex(layer => layer.id === state.activeLayer);
+    if (activeLayerRow === -1 && activeLayers.length) {
+      state.activeLayer = activeLayers[0].id;
+      activeLayerRow = 0;
+    }
+
+    container.innerHTML = '';
+    const cellSizePx = `${TIMELINE_CELL_SIZE}px`;
+    container.style.setProperty('--timeline-cell-size', cellSizePx);
+    const columnCount = frameCount + 1;
+    const rowCount = layerCount + 1;
+    container.style.gridTemplateColumns = `repeat(${columnCount}, ${cellSizePx})`;
+    container.style.gridTemplateRows = `repeat(${rowCount}, ${cellSizePx})`;
+
+    const fragment = document.createDocumentFragment();
+
+    const corner = document.createElement('div');
+    corner.className = 'timeline-cell timeline-cell--corner';
+    corner.style.gridColumn = '1';
+    corner.style.gridRow = '1';
+    corner.setAttribute('role', 'columnheader');
+    corner.setAttribute('aria-label', 'タイムライン');
+    fragment.appendChild(corner);
+
+    frames.forEach((frame, frameIndex) => {
+      const col = frameIndex + 2;
+      const header = document.createElement('div');
+      header.className = 'timeline-cell timeline-cell--frame-header';
+      header.style.gridColumn = String(col);
+      header.style.gridRow = '1';
+      header.setAttribute('role', 'columnheader');
+      if (frameIndex === activeFrameIndex) {
+        header.classList.add('is-active-frame');
+      }
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'timeline-frame-button';
+      const frameNumberMatch = String(frame.name).match(/(\d+)/);
+      button.textContent = frameNumberMatch && frameNumberMatch[1] ? frameNumberMatch[1] : String(frameIndex + 1);
+      button.addEventListener('click', () => {
+        state.activeFrame = frameIndex;
+        const candidateLayers = reversedLayersByFrame[frameIndex];
+        const nextLayer = candidateLayers[activeLayerRow] || candidateLayers[candidateLayers.length - 1] || candidateLayers[0];
+        if (nextLayer) {
+          state.activeLayer = nextLayer.id;
+        }
+        scheduleSessionPersist();
+        renderTimelineMatrix();
+        requestRender();
+        requestOverlayRender();
+      });
+
+      header.appendChild(button);
+      fragment.appendChild(header);
+    });
+
+    for (let rowIndex = 0; rowIndex < layerCount; rowIndex += 1) {
+      const row = rowIndex + 2;
+      const layer = activeLayers[rowIndex];
+      const labelName = layerNames[rowIndex] || String(layerCount - rowIndex);
+      const rowHeader = document.createElement('div');
+      rowHeader.className = 'timeline-cell timeline-cell--layer';
+      rowHeader.style.gridColumn = '1';
+      rowHeader.style.gridRow = String(row);
+      rowHeader.setAttribute('role', 'rowheader');
+
+      if (rowIndex === activeLayerRow) {
+        rowHeader.classList.add('is-active-layer');
+      }
+
+      if (layer) {
+        rowHeader.dataset.layerId = layer.id;
+        const visibilityToggle = document.createElement('button');
+        visibilityToggle.type = 'button';
+        visibilityToggle.className = 'timeline-visibility';
+        visibilityToggle.setAttribute('aria-pressed', String(layer.visible));
+        visibilityToggle.setAttribute('aria-label', layer.visible ? 'レイヤーを非表示' : 'レイヤーを表示');
+        visibilityToggle.textContent = layer.visible ? '●' : '○';
+        visibilityToggle.addEventListener('click', event => {
+          event.stopPropagation();
+          beginHistory('layerVisibility');
+          layer.visible = !layer.visible;
+          visibilityToggle.setAttribute('aria-pressed', String(layer.visible));
+          visibilityToggle.setAttribute('aria-label', layer.visible ? 'レイヤーを非表示' : 'レイヤーを表示');
+          visibilityToggle.textContent = layer.visible ? '●' : '○';
+          markHistoryDirty();
+          requestRender();
+          commitHistory();
+          scheduleSessionPersist();
+          renderTimelineMatrix();
+        });
+
+        const tag = document.createElement('button');
+        tag.type = 'button';
+        tag.className = 'timeline-layer-tag';
+        tag.textContent = labelName;
+        tag.addEventListener('click', () => {
+          state.activeLayer = layer.id;
+          scheduleSessionPersist();
+          renderTimelineMatrix();
+          requestOverlayRender();
+        });
+        rowHeader.appendChild(visibilityToggle);
+        rowHeader.appendChild(tag);
+      } else {
+        rowHeader.classList.add('is-placeholder');
+        rowHeader.textContent = labelName;
+        rowHeader.setAttribute('aria-hidden', 'true');
+      }
+
+      fragment.appendChild(rowHeader);
+
+      frames.forEach((frame, frameIndex) => {
+        const col = frameIndex + 2;
+        const cell = document.createElement('div');
+        cell.className = 'timeline-cell timeline-cell--body';
+        cell.style.gridColumn = String(col);
+        cell.style.gridRow = String(row);
+        cell.setAttribute('role', 'gridcell');
+
+        if (rowIndex === activeLayerRow) {
+          cell.classList.add('is-active-layer-row');
+        }
+        if (frameIndex === activeFrameIndex) {
+          cell.classList.add('is-active-frame-column');
+        }
+
+        const frameLayers = reversedLayersByFrame[frameIndex];
+        const targetLayer = frameLayers[rowIndex];
+        if (!targetLayer) {
+          cell.classList.add('is-empty');
+          const placeholder = document.createElement('span');
+          placeholder.className = 'timeline-slot is-disabled';
+          placeholder.textContent = '—';
+          placeholder.setAttribute('aria-hidden', 'true');
+          cell.appendChild(placeholder);
+          fragment.appendChild(cell);
+          return;
+        }
+
+        const slot = document.createElement('button');
+        slot.type = 'button';
+        slot.className = 'timeline-slot';
+        slot.setAttribute('aria-label', `${frame.name} / ${targetLayer.name}`);
+        if (!targetLayer.visible) {
+          slot.classList.add('is-hidden');
+        }
+        if (frameIndex === activeFrameIndex && targetLayer.id === state.activeLayer) {
+          slot.classList.add('is-active');
+          cell.classList.add('is-active-cell');
+        }
+        slot.addEventListener('click', () => {
+          state.activeFrame = frameIndex;
+          state.activeLayer = targetLayer.id;
+          scheduleSessionPersist();
+          renderTimelineMatrix();
+          requestRender();
+          requestOverlayRender();
+        });
+
+        const marker = document.createElement('span');
+        marker.className = 'timeline-slot__marker';
+        marker.setAttribute('aria-hidden', 'true');
+        slot.appendChild(marker);
+        cell.appendChild(slot);
+        fragment.appendChild(cell);
+      });
+    }
+
+    container.appendChild(fragment);
+
+    const activeFrame = frames[activeFrameIndex];
+    if (dom.controls.animationFps && activeFrame?.duration) {
+      const frameDuration = Math.max(activeFrame.duration, 1);
+      const fps = clamp(Math.round(1000 / frameDuration), 1, 60);
+      dom.controls.animationFps.value = String(fps);
+    }
+  }
+
+  function renderFrameList() {
+    renderTimelineMatrix();
   }
 
   function renderLayerList() {
-    const list = dom.controls.layerList;
-    if (!list) return;
-    list.innerHTML = '';
-    const frame = getActiveFrame();
-    frame.layers.slice().reverse().forEach(layer => {
-      const item = document.createElement('li');
-      item.className = 'item-row';
-      const isActive = layer.id === state.activeLayer;
-      item.classList.toggle('is-active', isActive);
-      const nameSpan = document.createElement('span');
-      nameSpan.textContent = layer.name;
-      const visibility = document.createElement('button');
-      visibility.type = 'button';
-      visibility.className = 'visibility-toggle';
-      visibility.textContent = layer.visible ? '👁' : '☒';
-      visibility.setAttribute('aria-pressed', String(layer.visible));
-      visibility.addEventListener('click', event => {
-        event.stopPropagation();
-        beginHistory('layerVisibility');
-        layer.visible = !layer.visible;
-        visibility.textContent = layer.visible ? '👁' : '☒';
-        visibility.setAttribute('aria-pressed', String(layer.visible));
-        markHistoryDirty();
-        requestRender();
-        commitHistory();
-        scheduleSessionPersist();
-      });
-      item.appendChild(visibility);
-      item.appendChild(nameSpan);
-      const opacityBox = document.createElement('input');
-      opacityBox.type = 'number';
-      opacityBox.min = '0';
-      opacityBox.max = '100';
-      opacityBox.value = String(Math.round(layer.opacity * 100));
-      opacityBox.addEventListener('change', event => {
-        beginHistory('layerOpacity');
-        layer.opacity = clamp(Number(event.target.value) / 100, 0, 1);
-        markHistoryDirty();
-        requestRender();
-        commitHistory();
-        scheduleSessionPersist();
-      });
-      item.appendChild(opacityBox);
-      item.addEventListener('click', () => {
-        state.activeLayer = layer.id;
-        scheduleSessionPersist();
-        renderLayerList();
-      });
-      list.appendChild(item);
-    });
+    renderTimelineMatrix();
   }
 
   function setupCanvas() {
@@ -3837,8 +3997,160 @@
     });
   }
 
+  function detachPointerListeners() {
+    window.removeEventListener('pointermove', handlePointerMove);
+    window.removeEventListener('pointerup', handlePointerUp);
+  }
+
+  function resetPointerState({ commitHistory: shouldCommit = false } = {}) {
+    if (pointerState.pointerId !== null && dom.canvases.drawing) {
+      try {
+        dom.canvases.drawing.releasePointerCapture(pointerState.pointerId);
+      } catch (error) {
+        // Ignore release failures when capture is not set.
+      }
+    }
+    pointerState.active = false;
+    pointerState.pointerId = null;
+    pointerState.tool = null;
+    pointerState.start = null;
+    pointerState.current = null;
+    pointerState.last = null;
+    pointerState.path = [];
+    pointerState.preview = null;
+    pointerState.selectionPreview = null;
+    pointerState.selectionMove = null;
+    pointerState.selectionClearedOnDown = false;
+    pointerState.startClient = null;
+    pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
+    pointerState.panMode = null;
+    pointerState.touchPanStart = null;
+    pointerState.curveHandle = null;
+    if (shouldCommit) {
+      commitHistory();
+    }
+    requestOverlayRender();
+  }
+
+  function abortActivePointerInteraction({ commitHistory: shouldCommit = true } = {}) {
+    if (!pointerState.active) {
+      return;
+    }
+    if (pointerState.tool === 'selectionMove') {
+      finalizeSelectionMove();
+    }
+    detachPointerListeners();
+    resetPointerState({ commitHistory: shouldCommit });
+  }
+
+  function updateTouchPointer(event) {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+    activeTouchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  }
+
+  function removeTouchPointer(event) {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+    activeTouchPointers.delete(event.pointerId);
+  }
+
+  function getTouchCentroid() {
+    if (!activeTouchPointers.size) {
+      return null;
+    }
+    let sumX = 0;
+    let sumY = 0;
+    activeTouchPointers.forEach(point => {
+      sumX += point.x;
+      sumY += point.y;
+    });
+    const count = activeTouchPointers.size;
+    return { x: sumX / count, y: sumY / count };
+  }
+
+  function refreshTouchPanBaseline() {
+    pointerState.touchPanStart = getTouchCentroid();
+    pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
+  }
+
+  function startPanInteraction(event, { multiTouch = false } = {}) {
+    pointerState.active = true;
+    pointerState.tool = 'pan';
+    pointerState.panMode = multiTouch ? 'multiTouch' : 'single';
+    pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
+    pointerState.path = [];
+    if (multiTouch) {
+      pointerState.pointerId = null;
+      pointerState.startClient = null;
+      pointerState.touchPanStart = getTouchCentroid();
+      if (!pointerState.touchPanStart) {
+        pointerState.touchPanStart = { x: event.clientX, y: event.clientY };
+      }
+    } else {
+      pointerState.pointerId = event.pointerId;
+      pointerState.startClient = { x: event.clientX, y: event.clientY };
+      pointerState.touchPanStart = null;
+      if (dom.canvases.drawing) {
+        dom.canvases.drawing.setPointerCapture(event.pointerId);
+      }
+    }
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  }
+
+  function finishPanInteraction() {
+    detachPointerListeners();
+    if (pointerState.pointerId !== null && dom.canvases.drawing) {
+      try {
+        dom.canvases.drawing.releasePointerCapture(pointerState.pointerId);
+      } catch (error) {
+        // Ignore capture release issues.
+      }
+    }
+    pointerState.active = false;
+    pointerState.pointerId = null;
+    pointerState.tool = null;
+    pointerState.panMode = null;
+    pointerState.touchPanStart = null;
+    pointerState.startClient = null;
+    pointerState.path = [];
+    requestOverlayRender();
+    scheduleSessionPersist();
+  }
+
   function handlePointerDown(event) {
-    if (event.button === 1) return;
+    const isTouch = event.pointerType === 'touch';
+    if (isTouch) {
+      updateTouchPointer(event);
+    }
+    const isMiddleMousePan = event.pointerType !== 'touch' && event.button === 1;
+    if (isMiddleMousePan) {
+      event.preventDefault();
+      if (pointerState.active) {
+        abortActivePointerInteraction();
+      }
+      startPanInteraction(event);
+      return;
+    }
+
+    if (isTouch && activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS) {
+      event.preventDefault();
+      if (!pointerState.active || pointerState.tool !== 'pan' || pointerState.panMode !== 'multiTouch') {
+        abortActivePointerInteraction();
+        startPanInteraction(event, { multiTouch: true });
+      } else {
+        refreshTouchPanBaseline();
+      }
+      return;
+    }
+
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
+
     event.preventDefault();
     const position = getPointerPosition(event);
     const activeTool = state.tool;
@@ -3849,10 +4161,7 @@
     }
 
     if (activeTool === 'pan') {
-      pointerState.startClient = { x: event.clientX, y: event.clientY };
-      pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
-      window.addEventListener('pointermove', handlePointerMove);
-      window.addEventListener('pointerup', handlePointerUp);
+      startPanInteraction(event, { multiTouch: isTouch && activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS });
       return;
     }
 
@@ -3888,6 +4197,9 @@
       return;
     }
 
+    if (!dom.canvases.drawing) {
+      return;
+    }
     dom.canvases.drawing.setPointerCapture(event.pointerId);
     hoverPixel = null;
     requestOverlayRender();
@@ -3908,14 +4220,18 @@
     if (activeTool === 'eyedropper') {
       sampleColor(position.x, position.y);
       pointerState.active = false;
-      dom.canvases.drawing.releasePointerCapture(event.pointerId);
+      if (dom.canvases.drawing) {
+        dom.canvases.drawing.releasePointerCapture(event.pointerId);
+      }
       return;
     }
 
     if (activeTool === 'selectSame') {
       createSelectionByColor(position.x, position.y);
       pointerState.active = false;
-      dom.canvases.drawing.releasePointerCapture(event.pointerId);
+      if (dom.canvases.drawing) {
+        dom.canvases.drawing.releasePointerCapture(event.pointerId);
+      }
       return;
     }
 
@@ -3923,7 +4239,9 @@
       floodFill(position.x, position.y);
       commitHistory();
       pointerState.active = false;
-      dom.canvases.drawing.releasePointerCapture(event.pointerId);
+      if (dom.canvases.drawing) {
+        dom.canvases.drawing.releasePointerCapture(event.pointerId);
+      }
       requestOverlayRender();
       return;
     }
@@ -3941,8 +4259,32 @@
   }
 
   function handlePointerMove(event) {
-    if (!pointerState.active || event.pointerId !== pointerState.pointerId) return;
+    if (event.pointerType === 'touch' && activeTouchPointers.has(event.pointerId)) {
+      updateTouchPointer(event);
+    }
+    if (!pointerState.active) return;
     if (pointerState.tool === 'pan') {
+      if (pointerState.panMode === 'multiTouch') {
+        if (!activeTouchPointers.has(event.pointerId)) {
+          return;
+        }
+        if (!pointerState.touchPanStart) {
+          refreshTouchPanBaseline();
+        }
+        const centroid = getTouchCentroid();
+        if (!centroid || !pointerState.touchPanStart) {
+          return;
+        }
+        const dx = centroid.x - pointerState.touchPanStart.x;
+        const dy = centroid.y - pointerState.touchPanStart.y;
+        const originX = pointerState.panOrigin?.x || 0;
+        const originY = pointerState.panOrigin?.y || 0;
+        state.pan.x = Math.round(originX + dx);
+        state.pan.y = Math.round(originY + dy);
+        applyViewportTransform();
+        return;
+      }
+      if (event.pointerId !== pointerState.pointerId) return;
       const dx = event.clientX - (pointerState.startClient?.x || 0);
       const dy = event.clientY - (pointerState.startClient?.y || 0);
       const originX = pointerState.panOrigin?.x || 0;
@@ -3952,6 +4294,7 @@
       applyViewportTransform();
       return;
     }
+    if (event.pointerId !== pointerState.pointerId) return;
     if (pointerState.tool === 'curve') {
       handleCurvePointerMove(event);
       return;
@@ -3978,20 +4321,37 @@
   }
 
   function handlePointerUp(event) {
-    if (!pointerState.active || event.pointerId !== pointerState.pointerId) return;
-    dom.canvases.drawing.releasePointerCapture(event.pointerId);
-    pointerState.active = false;
-    window.removeEventListener('pointermove', handlePointerMove);
-    window.removeEventListener('pointerup', handlePointerUp);
-
-    if (pointerState.tool === 'pan') {
-      pointerState.startClient = null;
-      pointerState.panOrigin = { x: state.pan.x, y: state.pan.y };
-      pointerState.path = [];
-      requestOverlayRender();
-      scheduleSessionPersist();
+    if (event.pointerType === 'touch') {
+      removeTouchPointer(event);
+    }
+    if (!pointerState.active) return;
+    const isPanTool = pointerState.tool === 'pan';
+    const isMultiTouchPan = isPanTool && pointerState.panMode === 'multiTouch';
+    if (isPanTool) {
+      if (isMultiTouchPan) {
+        if (activeTouchPointers.size >= TOUCH_PAN_MIN_POINTERS) {
+          refreshTouchPanBaseline();
+          return;
+        }
+        finishPanInteraction();
+        return;
+      }
+      if (pointerState.pointerId !== event.pointerId) {
+        return;
+      }
+      finishPanInteraction();
       return;
     }
+
+    if (event.pointerId !== pointerState.pointerId) {
+      return;
+    }
+
+    if (dom.canvases.drawing) {
+      dom.canvases.drawing.releasePointerCapture(event.pointerId);
+    }
+    pointerState.active = false;
+    detachPointerListeners();
 
     if (pointerState.tool === 'curve') {
       handleCurvePointerUp(event);
@@ -4035,6 +4395,22 @@
     pointerState.selectionClearedOnDown = false;
     pointerState.path = [];
     requestOverlayRender();
+  }
+
+  function handlePointerCancel(event) {
+    if (event.pointerType === 'touch') {
+      removeTouchPointer(event);
+    }
+    if (!pointerState.active) {
+      return;
+    }
+    if (pointerState.tool === 'pan') {
+      finishPanInteraction();
+      return;
+    }
+    if (pointerState.pointerId === event.pointerId) {
+      abortActivePointerInteraction();
+    }
   }
 
   function beginSelectionMove(event, startPosition) {
