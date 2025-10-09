@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'pixieedraw-static-v9';
+const CACHE_VERSION = 'pixieedraw-static-v10';
 const APP_SHELL = [
   './',
   './index.html',
@@ -7,7 +7,10 @@ const APP_SHELL = [
   './assets/js/app.js',
   './assets/js/pwa.js',
   './assets/icons/menu-canvas.png',
-  './assets/icons/tool-cursor.png'
+  './assets/icons/tool-cursor.png',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './ogp.png'
 ];
 
 self.addEventListener('install', event => {
