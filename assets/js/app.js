@@ -76,14 +76,18 @@
       addFrame: document.getElementById('addFrame'),
       removeFrame: document.getElementById('removeFrame'),
       playAnimation: document.getElementById('playAnimation'),
+      stopAnimation: document.getElementById('stopAnimation'),
+      rewindAnimation: document.getElementById('rewindAnimation'),
+      forwardAnimation: document.getElementById('forwardAnimation'),
       animationFps: document.getElementById('animationFps'),
+      animationFpsMs: document.getElementById('animationFpsMs'),
+      applyFpsAll: document.getElementById('applyFpsAll'),
       canvasWidth: document.getElementById('canvasWidth'),
       canvasHeight: document.getElementById('canvasHeight'),
       toggleChecker: document.getElementById('toggleChecker'),
       togglePixelPreview: document.getElementById('togglePixelPreview'),
       openDocument: document.getElementById('openDocument'),
-      exportPng: document.getElementById('exportPng'),
-      exportGif: document.getElementById('exportGif'),
+      exportProject: document.getElementById('exportProject'),
       clearCanvas: document.getElementById('clearCanvas'),
       enableAutosave: document.getElementById('enableAutosave'),
       autosaveStatus: document.getElementById('autosaveStatus'),
@@ -99,6 +103,13 @@
       heightInput: document.getElementById('newProjectHeight'),
       cancel: document.getElementById('cancelNewProject'),
       confirm: document.getElementById('confirmNewProject'),
+    },
+    exportDialog: {
+      dialog: /** @type {HTMLDialogElement|null} */ (document.getElementById('exportDialog')),
+      form: document.getElementById('exportDialogForm'),
+      confirmPng: document.getElementById('confirmExportPng'),
+      confirmGif: document.getElementById('confirmExportGif'),
+      cancel: document.getElementById('cancelExport'),
     },
   };
 
@@ -2118,6 +2129,141 @@
     input.click();
   }
 
+  function openExportDialog() {
+    const config = dom.exportDialog;
+    if (!config) {
+      exportProjectWithFallback();
+      return;
+    }
+    const dialog = config.dialog;
+    if (dialog && typeof dialog.showModal === 'function') {
+      dialog.showModal();
+    } else {
+      exportProjectWithFallback();
+    }
+  }
+
+  function closeExportDialog() {
+    const dialog = dom.exportDialog?.dialog;
+    if (dialog && dialog.open) {
+      dialog.close();
+    }
+  }
+
+  function exportProjectWithFallback() {
+    const choice = window.prompt('書き出し形式を入力してください (png / gif)', 'png');
+    if (!choice) {
+      return;
+    }
+    const normalized = choice.trim().toLowerCase();
+    if (normalized === 'png') {
+      exportProjectAsPng();
+    } else if (normalized === 'gif') {
+      exportProjectAsGif();
+    } else {
+      window.alert('png か gif を入力してください。');
+    }
+  }
+
+  function normalizeFpsValue(value) {
+    return clamp(Math.round(Number(value) || 0), 1, 60);
+  }
+
+  function getDurationFromFps(fps) {
+    if (!Number.isFinite(fps) || fps <= 0) {
+      return 1000 / 12;
+    }
+    return 1000 / fps;
+  }
+
+  function updateAnimationFpsDisplay(fps, durationMs) {
+    if (dom.controls.animationFps) {
+      dom.controls.animationFps.value = String(fps);
+    }
+    if (dom.controls.animationFpsMs) {
+      const rounded = Math.max(1, Math.round(Number(durationMs) || 0));
+      dom.controls.animationFpsMs.textContent = `${rounded}ms`;
+    }
+  }
+
+  function syncAnimationFpsDisplayFromState() {
+    const frame = getActiveFrame();
+    const duration = frame && Number.isFinite(frame.duration) && frame.duration > 0
+      ? frame.duration
+      : 1000 / 12;
+    const fps = normalizeFpsValue(Math.round(1000 / duration));
+    updateAnimationFpsDisplay(fps, duration);
+  }
+
+  function applyFpsToAllFrames(fpsValue) {
+    const frames = state.frames;
+    if (!Array.isArray(frames) || !frames.length) {
+      return;
+    }
+    const clampedFps = normalizeFpsValue(fpsValue);
+    const nextDuration = getDurationFromFps(clampedFps);
+    const hasChange = frames.some(frame => Math.abs(frame.duration - nextDuration) > 0.001);
+    if (!hasChange) {
+      updateAnimationFpsDisplay(clampedFps, nextDuration);
+      return;
+    }
+    beginHistory('setAllFrameFps');
+    frames.forEach(frame => {
+      frame.duration = nextDuration;
+    });
+    markHistoryDirty();
+    commitHistory();
+    scheduleSessionPersist();
+    renderTimelineMatrix();
+    updateAnimationFpsDisplay(clampedFps, nextDuration);
+  }
+
+  function setActiveFrameIndex(nextIndex, { wrap = false, persist = true, render = true } = {}) {
+    const frames = state.frames;
+    if (!Array.isArray(frames) || !frames.length) {
+      return null;
+    }
+    const length = frames.length;
+    const normalizedIndex = wrap
+      ? ((Math.round(nextIndex) % length) + length) % length
+      : clamp(Math.round(nextIndex), 0, length - 1);
+    const previousIndex = state.activeFrame;
+    state.activeFrame = normalizedIndex;
+    const frame = frames[normalizedIndex];
+    if (frame && (!frame.layers.some(layer => layer.id === state.activeLayer) || !state.activeLayer)) {
+      const lastLayer = frame.layers[frame.layers.length - 1];
+      if (lastLayer) {
+        state.activeLayer = lastLayer.id;
+      }
+    }
+    if (persist) {
+      scheduleSessionPersist();
+    }
+    if (render) {
+      if (previousIndex !== normalizedIndex) {
+        renderFrameList();
+        renderLayerList();
+        requestRender();
+        requestOverlayRender();
+      } else {
+        syncAnimationFpsDisplayFromState();
+      }
+    }
+    return frame;
+  }
+
+  function stepActiveFrame(offset, options = {}) {
+    const frames = state.frames;
+    if (!Array.isArray(frames) || !frames.length) {
+      return;
+    }
+    const wrap = options.wrap !== false;
+    const persist = options.persist !== false;
+    const render = options.render !== false;
+    const nextIndex = state.activeFrame + Number(offset || 0);
+    setActiveFrameIndex(nextIndex, { wrap, persist, render });
+  }
+
   function openNewProjectDialog() {
     const config = dom.newProject;
     if (!config) {
@@ -2143,6 +2289,39 @@
       return;
     }
     promptNewProjectFallback();
+  }
+
+  function setupExportDialog() {
+    const config = dom.exportDialog;
+    if (!config) {
+      return;
+    }
+    const dialog = config.dialog;
+    const supportsDialog = dialog && typeof dialog.showModal === 'function';
+    const bind = (element, handler) => {
+      if (element) {
+        element.addEventListener('click', handler);
+      }
+    };
+    bind(config.confirmPng, () => {
+      exportProjectAsPng();
+      closeExportDialog();
+    });
+    bind(config.confirmGif, () => {
+      exportProjectAsGif();
+      closeExportDialog();
+    });
+    bind(config.cancel, () => {
+      closeExportDialog();
+    });
+    if (supportsDialog && dialog) {
+      dialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        closeExportDialog();
+      });
+    } else if (dialog) {
+      dialog.hidden = true;
+    }
   }
 
   function closeNewProjectDialog() {
@@ -2542,6 +2721,713 @@
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Export helpers
+  // -------------------------------------------------------------------------
+
+  async function exportProjectAsPng() {
+    const frameCount = state.frames.length;
+    if (!frameCount) {
+      updateAutosaveStatus('PNGを書き出すフレームがありません', 'warn');
+      return;
+    }
+    try {
+      const { width, height } = state;
+      const framePixels = compositeDocumentFrames(state.frames, width, height, state.palette);
+      const { canvas, columns, rows } = createSpriteSheetCanvas(framePixels, width, height);
+      const blob = await canvasToBlob(canvas, 'image/png');
+      if (!blob) {
+        throw new Error('Failed to create PNG blob');
+      }
+      const suffix = frameCount > 1
+        ? `sheet_${columns}x${rows}`
+        : `frame_${String(state.activeFrame + 1).padStart(2, '0')}`;
+      const filename = createExportFileName('png', suffix);
+      triggerDownloadFromBlob(blob, filename);
+      updateAutosaveStatus('PNGを書き出しました', 'success');
+    } catch (error) {
+      console.error('PNG export failed', error);
+      updateAutosaveStatus('PNGの書き出しに失敗しました', 'error');
+    }
+  }
+
+  async function exportProjectAsGif() {
+    const frameCount = state.frames.length;
+    if (!frameCount) {
+      updateAutosaveStatus('GIFを書き出すフレームがありません', 'warn');
+      return;
+    }
+    try {
+      const { width, height } = state;
+      const framePixels = compositeDocumentFrames(state.frames, width, height, state.palette);
+      const frameDurations = state.frames.map(frame => clamp(Math.round(Number(frame.duration) || 0), 16, 2000));
+      const gifBytes = buildGifFromPixels(framePixels, frameDurations, width, height);
+      const blob = new Blob([gifBytes], { type: 'image/gif' });
+      const filename = createExportFileName('gif', 'animation');
+      triggerDownloadFromBlob(blob, filename);
+      updateAutosaveStatus('GIFを書き出しました', 'success');
+    } catch (error) {
+      console.error('GIF export failed', error);
+      updateAutosaveStatus('GIFの書き出しに失敗しました', 'error');
+    }
+  }
+
+  function compositeDocumentFrames(frames, width, height, palette) {
+    return frames.map(frame => compositeFramePixels(frame, width, height, palette));
+  }
+
+  function compositeFramePixels(frame, width, height, palette) {
+    const pixelCount = width * height;
+    const output = new Uint8ClampedArray(pixelCount * 4);
+    if (!frame || !Array.isArray(frame.layers)) {
+      return output;
+    }
+    frame.layers.forEach(layer => {
+      if (!layer || !layer.visible || layer.opacity <= 0) {
+        return;
+      }
+      const layerOpacity = clamp(Number(layer.opacity) || 0, 0, 1);
+      if (layerOpacity <= 0) {
+        return;
+      }
+      const indices = layer.indices instanceof Int16Array && layer.indices.length >= pixelCount ? layer.indices : null;
+      const direct = layer.direct instanceof Uint8ClampedArray && layer.direct.length >= pixelCount * 4 ? layer.direct : null;
+      for (let i = 0; i < pixelCount; i += 1) {
+        const paletteIndex = indices ? indices[i] : -1;
+        let srcR;
+        let srcG;
+        let srcB;
+        let srcA;
+        if (paletteIndex >= 0 && palette && palette[paletteIndex]) {
+          const color = palette[paletteIndex];
+          srcR = color.r;
+          srcG = color.g;
+          srcB = color.b;
+          srcA = color.a;
+        } else if (direct) {
+          const base = i * 4;
+          srcR = direct[base];
+          srcG = direct[base + 1];
+          srcB = direct[base + 2];
+          srcA = direct[base + 3];
+        } else {
+          continue;
+        }
+        if (!Number.isFinite(srcA) || srcA <= 0) {
+          continue;
+        }
+        const alpha = (srcA / 255) * layerOpacity;
+        if (alpha <= 0) {
+          continue;
+        }
+        const destIndex = i * 4;
+        const dstA = output[destIndex + 3] / 255;
+        const outA = alpha + dstA * (1 - alpha);
+        if (outA <= 0) {
+          continue;
+        }
+        const srcFactor = alpha / outA;
+        const dstFactor = (dstA * (1 - alpha)) / outA;
+        output[destIndex] = Math.round(srcR * srcFactor + output[destIndex] * dstFactor);
+        output[destIndex + 1] = Math.round(srcG * srcFactor + output[destIndex + 1] * dstFactor);
+        output[destIndex + 2] = Math.round(srcB * srcFactor + output[destIndex + 2] * dstFactor);
+        output[destIndex + 3] = Math.round(outA * 255);
+      }
+    });
+    return output;
+  }
+
+  function createSpriteSheetCanvas(framePixelsList, width, height) {
+    const frameCount = framePixelsList.length;
+    const columns = Math.max(1, Math.ceil(Math.sqrt(frameCount)));
+    const rows = Math.max(1, Math.ceil(frameCount / columns));
+    const canvas = document.createElement('canvas');
+    canvas.width = columns * width;
+    canvas.height = rows * height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Canvasのコンテキストを取得できませんでした');
+    }
+    framePixelsList.forEach((pixels, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      ctx.putImageData(new ImageData(pixels, width, height), col * width, row * height);
+    });
+    return { canvas, columns, rows };
+  }
+
+  function canvasToBlob(canvas, mimeType) {
+    return new Promise((resolve, reject) => {
+      if (typeof canvas.toBlob === 'function') {
+        canvas.toBlob(blob => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Canvas toBlob returned null'));
+          }
+        }, mimeType);
+        return;
+      }
+      try {
+        const dataUrl = canvas.toDataURL(mimeType);
+        const blob = dataUrlToBlob(dataUrl, mimeType);
+        resolve(blob);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function dataUrlToBlob(dataUrl, mimeType) {
+    const parts = dataUrl.split(',');
+    if (parts.length < 2) {
+      throw new Error('Invalid data URL');
+    }
+    const byteString = window.atob(parts[1]);
+    const length = byteString.length;
+    const bytes = new Uint8Array(length);
+    for (let i = 0; i < length; i += 1) {
+      bytes[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  function triggerDownloadFromBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function buildGifFromPixels(framePixels, frameDurations, width, height) {
+    const { palette, indexedFrames, transparentIndex } = buildIndexedFramesForGif(framePixels, width, height);
+    const gifPalette = ensureGifPalette(palette);
+    const writerBaseOptions = { loop: 0, palette: gifPalette };
+    const estimatedSize = Math.max(width * height * indexedFrames.length * 4 + gifPalette.length * 6 + 2048, 4096);
+    let bufferSize = estimatedSize;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const buffer = new Uint8Array(bufferSize);
+      try {
+        const writer = new GifWriter(buffer, width, height, writerBaseOptions);
+        indexedFrames.forEach((indexedPixels, index) => {
+          const durationMs = clamp(Math.round(Number(frameDurations[index]) || 0), 16, 2000);
+          const delayHundredths = clamp(Math.round(durationMs / 10), 2, 65535);
+          const hasTransparency = transparentIndex !== null;
+          const frameOptions = {
+            delay: delayHundredths,
+            disposal: hasTransparency ? 2 : 0,
+          };
+          if (hasTransparency) {
+            frameOptions.transparent = transparentIndex;
+          }
+          writer.addFrame(0, 0, width, height, indexedPixels, frameOptions);
+        });
+        const size = writer.end();
+        return buffer.slice(0, size);
+      } catch (error) {
+        if (attempt === 3) {
+          throw error;
+        }
+        bufferSize *= 2;
+      }
+    }
+    throw new Error('Unable to encode GIF');
+  }
+
+  function buildIndexedFramesForGif(framePixels, width, height) {
+    const pixelCount = width * height;
+    const colorCounts = new Map();
+    let hasTransparency = false;
+    framePixels.forEach(pixels => {
+      for (let i = 0; i < pixelCount; i += 1) {
+        const base = i * 4;
+        const alpha = pixels[base + 3];
+        if (!alpha) {
+          hasTransparency = true;
+          continue;
+        }
+        const key = encodeColorKey(pixels[base], pixels[base + 1], pixels[base + 2]);
+        colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+      }
+    });
+    const maxOpaqueColors = hasTransparency ? 255 : 256;
+    const opaqueEntries = [];
+    colorCounts.forEach((count, key) => {
+      const decoded = decodeColorKey(key);
+      opaqueEntries.push({ r: decoded.r, g: decoded.g, b: decoded.b, count });
+    });
+    const paletteColors = quantizeOpaqueColors(opaqueEntries, maxOpaqueColors);
+    if (!paletteColors.length) {
+      paletteColors.push({ r: 0, g: 0, b: 0 });
+    }
+    const palette = [];
+    let transparentIndex = null;
+    if (hasTransparency) {
+      palette.push(0);
+      transparentIndex = 0;
+    }
+    paletteColors.forEach(color => {
+      const rgb = (color.r << 16) | (color.g << 8) | color.b;
+      palette.push(rgb);
+    });
+    const paletteRgb = palette.map(rgb => ({
+      r: (rgb >> 16) & 0xff,
+      g: (rgb >> 8) & 0xff,
+      b: rgb & 0xff,
+    }));
+    const colorIndexMap = new Map();
+    const indexedFrames = framePixels.map(pixels => {
+      const frameIndices = new Uint8Array(pixelCount);
+      for (let i = 0; i < pixelCount; i += 1) {
+        const base = i * 4;
+        const alpha = pixels[base + 3];
+        if (!alpha) {
+          frameIndices[i] = transparentIndex ?? 0;
+          continue;
+        }
+        const key = encodeColorKey(pixels[base], pixels[base + 1], pixels[base + 2]);
+        let paletteIndex = colorIndexMap.get(key);
+        if (paletteIndex === undefined) {
+          paletteIndex = findNearestPaletteIndex(pixels[base], pixels[base + 1], pixels[base + 2], paletteRgb, transparentIndex);
+          colorIndexMap.set(key, paletteIndex);
+        }
+        frameIndices[i] = paletteIndex;
+      }
+      return frameIndices;
+    });
+    return { palette, indexedFrames, transparentIndex };
+  }
+
+  function ensureGifPalette(palette) {
+    const padded = palette.slice();
+    if (padded.length < 2) {
+      padded.push(padded[0] ?? 0);
+    }
+    let size = 1;
+    while (size < padded.length && size < 256) {
+      size <<= 1;
+    }
+    if (size > 256) {
+      size = 256;
+    }
+    while (padded.length < size) {
+      padded.push(padded[padded.length - 1]);
+    }
+    return padded;
+  }
+
+  function findNearestPaletteIndex(r, g, b, paletteRgb, transparentIndex) {
+    let bestIndex = transparentIndex === 0 ? 1 : 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < paletteRgb.length; i += 1) {
+      if (i === transparentIndex) {
+        continue;
+      }
+      const color = paletteRgb[i];
+      const dr = color.r - r;
+      const dg = color.g - g;
+      const db = color.b - b;
+      const distance = dr * dr + dg * dg + db * db;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+        if (distance === 0) {
+          break;
+        }
+      }
+    }
+    if (bestDistance === Number.POSITIVE_INFINITY) {
+      return transparentIndex ?? 0;
+    }
+    return bestIndex;
+  }
+
+  function quantizeOpaqueColors(colors, maxColors) {
+    if (!colors.length) {
+      return [];
+    }
+    if (colors.length <= maxColors) {
+      return colors.map(color => ({ r: color.r, g: color.g, b: color.b }));
+    }
+    const boxes = [createColorBox(colors)];
+    while (boxes.length < maxColors) {
+      boxes.sort((a, b) => {
+        if (b.range === a.range) {
+          return b.totalCount - a.totalCount;
+        }
+        return b.range - a.range;
+      });
+      const box = boxes.shift();
+      if (!box || box.colors.length <= 1) {
+        if (box) {
+          boxes.push(box);
+        }
+        break;
+      }
+      const split = splitColorBox(box);
+      if (!split) {
+        boxes.push(box);
+        break;
+      }
+      boxes.push(split[0], split[1]);
+    }
+    return boxes.map(box => averageColorFromBox(box.colors));
+  }
+
+  function createColorBox(colors) {
+    let rMin = 255;
+    let rMax = 0;
+    let gMin = 255;
+    let gMax = 0;
+    let bMin = 255;
+    let bMax = 0;
+    let totalCount = 0;
+    colors.forEach(color => {
+      rMin = Math.min(rMin, color.r);
+      rMax = Math.max(rMax, color.r);
+      gMin = Math.min(gMin, color.g);
+      gMax = Math.max(gMax, color.g);
+      bMin = Math.min(bMin, color.b);
+      bMax = Math.max(bMax, color.b);
+      totalCount += color.count || 1;
+    });
+    const range = Math.max(rMax - rMin, gMax - gMin, bMax - bMin);
+    return {
+      colors: colors.slice(),
+      rMin,
+      rMax,
+      gMin,
+      gMax,
+      bMin,
+      bMax,
+      range,
+      totalCount,
+    };
+  }
+
+  function splitColorBox(box) {
+    const channel = selectSplitChannel(box);
+    const sorted = box.colors.slice().sort((a, b) => a[channel] - b[channel]);
+    if (!sorted.length) {
+      return null;
+    }
+    const total = sorted.reduce((sum, color) => sum + (color.count || 1), 0);
+    const target = total / 2;
+    let run = 0;
+    let pivot = 0;
+    for (; pivot < sorted.length - 1; pivot += 1) {
+      run += sorted[pivot].count || 1;
+      if (run >= target) {
+        break;
+      }
+    }
+    const left = sorted.slice(0, pivot + 1);
+    const right = sorted.slice(pivot + 1);
+    if (!left.length || !right.length) {
+      return null;
+    }
+    return [createColorBox(left), createColorBox(right)];
+  }
+
+  function selectSplitChannel(box) {
+    const rRange = box.rMax - box.rMin;
+    const gRange = box.gMax - box.gMin;
+    const bRange = box.bMax - box.bMin;
+    if (rRange >= gRange && rRange >= bRange) {
+      return 'r';
+    }
+    if (gRange >= rRange && gRange >= bRange) {
+      return 'g';
+    }
+    return 'b';
+  }
+
+  function averageColorFromBox(colors) {
+    let total = 0;
+    let rTotal = 0;
+    let gTotal = 0;
+    let bTotal = 0;
+    colors.forEach(color => {
+      const weight = color.count || 1;
+      total += weight;
+      rTotal += color.r * weight;
+      gTotal += color.g * weight;
+      bTotal += color.b * weight;
+    });
+    if (!total) {
+      return { r: 0, g: 0, b: 0 };
+    }
+    return {
+      r: Math.round(rTotal / total),
+      g: Math.round(gTotal / total),
+      b: Math.round(bTotal / total),
+    };
+  }
+
+  function encodeColorKey(r, g, b) {
+    return (r << 16) | (g << 8) | b;
+  }
+
+  function decodeColorKey(key) {
+    return {
+      r: (key >> 16) & 0xff,
+      g: (key >> 8) & 0xff,
+      b: key & 0xff,
+    };
+  }
+
+  // GifWriter implementation adapted from https://github.com/deanm/omggif (MIT License).
+  function GifWriter(buf, width, height, gopts) {
+    let p = 0;
+
+    gopts = gopts === undefined ? {} : gopts;
+    const loop_count = gopts.loop === undefined ? null : gopts.loop;
+    const global_palette = gopts.palette === undefined ? null : gopts.palette;
+
+    if (width <= 0 || height <= 0 || width > 65535 || height > 65535) {
+      throw new Error('Width/Height invalid.');
+    }
+
+    function check_palette_and_num_colors(palette) {
+      let num_colors = palette.length;
+      if (num_colors < 2 || num_colors > 256 || (num_colors & (num_colors - 1))) {
+        throw new Error('Invalid code/color length, must be power of 2 and 2 .. 256.');
+      }
+      return num_colors;
+    }
+
+    buf[p++] = 0x47; buf[p++] = 0x49; buf[p++] = 0x46;
+    buf[p++] = 0x38; buf[p++] = 0x39; buf[p++] = 0x61;
+
+    let gp_num_colors_pow2 = 0;
+    let background = 0;
+    if (global_palette !== null) {
+      let gp_num_colors = check_palette_and_num_colors(global_palette);
+      while (gp_num_colors >>= 1) gp_num_colors_pow2 += 1;
+      gp_num_colors = 1 << gp_num_colors_pow2;
+      gp_num_colors_pow2 -= 1;
+      if (gopts.background !== undefined) {
+        background = gopts.background;
+        if (background >= gp_num_colors) {
+          throw new Error('Background index out of range.');
+        }
+        if (background === 0) {
+          throw new Error('Background index explicitly passed as 0.');
+        }
+      }
+    }
+
+    buf[p++] = width & 0xff; buf[p++] = (width >> 8) & 0xff;
+    buf[p++] = height & 0xff; buf[p++] = (height >> 8) & 0xff;
+    buf[p++] = (global_palette !== null ? 0x80 : 0) | gp_num_colors_pow2;
+    buf[p++] = background;
+    buf[p++] = 0;
+
+    if (global_palette !== null) {
+      for (let i = 0, il = global_palette.length; i < il; ++i) {
+        const rgb = global_palette[i];
+        buf[p++] = (rgb >> 16) & 0xff;
+        buf[p++] = (rgb >> 8) & 0xff;
+        buf[p++] = rgb & 0xff;
+      }
+    }
+
+    if (loop_count !== null) {
+      if (loop_count < 0 || loop_count > 65535) {
+        throw new Error('Loop count invalid.');
+      }
+      buf[p++] = 0x21; buf[p++] = 0xff; buf[p++] = 0x0b;
+      buf[p++] = 0x4e; buf[p++] = 0x45; buf[p++] = 0x54; buf[p++] = 0x53;
+      buf[p++] = 0x43; buf[p++] = 0x41; buf[p++] = 0x50; buf[p++] = 0x45;
+      buf[p++] = 0x32; buf[p++] = 0x2e; buf[p++] = 0x30;
+      buf[p++] = 0x03; buf[p++] = 0x01;
+      buf[p++] = loop_count & 0xff; buf[p++] = (loop_count >> 8) & 0xff;
+      buf[p++] = 0x00;
+    }
+
+    let ended = false;
+
+    this.addFrame = function addFrame(x, y, w, h, indexed_pixels, opts) {
+      if (ended === true) {
+        p -= 1;
+        ended = false;
+      }
+
+      opts = opts === undefined ? {} : opts;
+
+      if (x < 0 || y < 0 || x > 65535 || y > 65535) {
+        throw new Error('x/y invalid.');
+      }
+      if (w <= 0 || h <= 0 || w > 65535 || h > 65535) {
+        throw new Error('Width/Height invalid.');
+      }
+      if (indexed_pixels.length < w * h) {
+        throw new Error('Not enough pixels for the frame size.');
+      }
+
+      let using_local_palette = true;
+      let palette = opts.palette;
+      if (palette === undefined || palette === null) {
+        using_local_palette = false;
+        palette = global_palette;
+      }
+      if (palette === undefined || palette === null) {
+        throw new Error('Must supply either a local or global palette.');
+      }
+
+      let num_colors = check_palette_and_num_colors(palette);
+      let min_code_size = 0;
+      while (num_colors >>= 1) min_code_size += 1;
+      num_colors = 1 << min_code_size;
+
+      const delay = opts.delay === undefined ? 0 : opts.delay;
+      const disposal = opts.disposal === undefined ? 0 : opts.disposal;
+      if (disposal < 0 || disposal > 3) {
+        throw new Error('Disposal out of range.');
+      }
+
+      let use_transparency = false;
+      let transparent_index = 0;
+      if (opts.transparent !== undefined && opts.transparent !== null) {
+        use_transparency = true;
+        transparent_index = opts.transparent;
+        if (transparent_index < 0 || transparent_index >= num_colors) {
+          throw new Error('Transparent color index.');
+        }
+      }
+
+      if (disposal !== 0 || use_transparency || delay !== 0) {
+        buf[p++] = 0x21; buf[p++] = 0xf9;
+        buf[p++] = 4;
+        buf[p++] = (disposal << 2) | (use_transparency === true ? 1 : 0);
+        buf[p++] = delay & 0xff; buf[p++] = (delay >> 8) & 0xff;
+        buf[p++] = transparent_index;
+        buf[p++] = 0;
+      }
+
+      buf[p++] = 0x2c;
+      buf[p++] = x & 0xff; buf[p++] = (x >> 8) & 0xff;
+      buf[p++] = y & 0xff; buf[p++] = (y >> 8) & 0xff;
+      buf[p++] = w & 0xff; buf[p++] = (w >> 8) & 0xff;
+      buf[p++] = h & 0xff; buf[p++] = (h >> 8) & 0xff;
+      buf[p++] = using_local_palette === true ? (0x80 | (min_code_size - 1)) : 0;
+
+      if (using_local_palette === true) {
+        for (let i = 0, il = palette.length; i < il; ++i) {
+          const rgb = palette[i];
+          buf[p++] = (rgb >> 16) & 0xff;
+          buf[p++] = (rgb >> 8) & 0xff;
+          buf[p++] = rgb & 0xff;
+        }
+      }
+
+      p = GifWriterOutputLZWCodeStream(buf, p, min_code_size < 2 ? 2 : min_code_size, indexed_pixels);
+      return p;
+    };
+
+    this.end = function end() {
+      if (ended === false) {
+        buf[p++] = 0x3b;
+        ended = true;
+      }
+      return p;
+    };
+
+    this.getOutputBuffer = function getOutputBuffer() { return buf; };
+    this.setOutputBuffer = function setOutputBuffer(v) { buf = v; };
+    this.getOutputBufferPosition = function getOutputBufferPosition() { return p; };
+    this.setOutputBufferPosition = function setOutputBufferPosition(v) { p = v; };
+  }
+
+  function GifWriterOutputLZWCodeStream(buf, p, min_code_size, index_stream) {
+    buf[p++] = min_code_size;
+    let cur_subblock = p++;
+
+    const clear_code = 1 << min_code_size;
+    const code_mask = clear_code - 1;
+    const eoi_code = clear_code + 1;
+    let next_code = eoi_code + 1;
+
+    let cur_code_size = min_code_size + 1;
+    let cur_shift = 0;
+    let cur = 0;
+
+    function emit_bytes_to_buffer(bit_block_size) {
+      while (cur_shift >= bit_block_size) {
+        buf[p++] = cur & 0xff;
+        cur >>= 8;
+        cur_shift -= 8;
+        if (p === cur_subblock + 256) {
+          buf[cur_subblock] = 255;
+          cur_subblock = p++;
+        }
+      }
+    }
+
+    function emit_code(c) {
+      cur |= c << cur_shift;
+      cur_shift += cur_code_size;
+      emit_bytes_to_buffer(8);
+    }
+
+    let ib_code = index_stream[0] & code_mask;
+    let code_table = {};
+
+    emit_code(clear_code);
+
+    for (let i = 1, il = index_stream.length; i < il; ++i) {
+      const k = index_stream[i] & code_mask;
+      const cur_key = (ib_code << 8) | k;
+      const cur_code = code_table[cur_key];
+
+      if (cur_code === undefined) {
+        cur |= ib_code << cur_shift;
+        cur_shift += cur_code_size;
+        while (cur_shift >= 8) {
+          buf[p++] = cur & 0xff;
+          cur >>= 8;
+          cur_shift -= 8;
+          if (p === cur_subblock + 256) {
+            buf[cur_subblock] = 255;
+            cur_subblock = p++;
+          }
+        }
+
+        if (next_code === 4096) {
+          emit_code(clear_code);
+          next_code = eoi_code + 1;
+          cur_code_size = min_code_size + 1;
+          code_table = {};
+        } else {
+          if (next_code >= (1 << cur_code_size)) {
+            cur_code_size += 1;
+          }
+          code_table[cur_key] = next_code++;
+        }
+
+        ib_code = k;
+      } else {
+        ib_code = cur_code;
+      }
+    }
+
+    emit_code(ib_code);
+    emit_code(eoi_code);
+    emit_bytes_to_buffer(1);
+
+    if (cur_subblock + 1 === p) {
+      buf[cur_subblock] = 0;
+    } else {
+      buf[cur_subblock] = p - cur_subblock - 1;
+      buf[p++] = 0;
+    }
+    return p;
+  }
+
   function encodeTypedArray(view) {
     if (!view) return '';
     const bytes = view instanceof Uint8Array
@@ -2638,6 +3524,7 @@
     setupRightTabs();
     setupLayout();
     setupControls();
+    setupExportDialog();
     setupTools();
     setupToolGroups();
     setupPaletteEditor();
@@ -2882,12 +3769,8 @@
       openDocumentDialog();
     });
 
-    dom.controls.exportPng?.addEventListener('click', () => {
-      exportProjectAsPng();
-    });
-
-    dom.controls.exportGif?.addEventListener('click', () => {
-      exportProjectAsGif();
+    dom.controls.exportProject?.addEventListener('click', () => {
+      openExportDialog();
     });
 
     if (dom.newProject?.button) {
@@ -3582,59 +4465,87 @@
       commitHistory();
     });
 
-    dom.controls.playAnimation?.addEventListener('click', togglePlayback);
+    dom.controls.playAnimation?.addEventListener('click', () => {
+      if (!state.playback.isPlaying) {
+        startPlayback();
+      }
+    });
+    dom.controls.stopAnimation?.addEventListener('click', () => {
+      stopPlayback();
+    });
+    dom.controls.rewindAnimation?.addEventListener('click', () => {
+      stopPlayback();
+      setActiveFrameIndex(0, { wrap: false });
+    });
+    dom.controls.forwardAnimation?.addEventListener('click', () => {
+      stopPlayback();
+      stepActiveFrame(1, { wrap: true });
+    });
     dom.controls.animationFps?.addEventListener('change', () => {
       const frame = getActiveFrame();
-      const fps = clamp(Number(dom.controls.animationFps.value), 1, 60) || 12;
-      frame.duration = 1000 / fps;
-      dom.controls.animationFps.value = String(fps);
+      const fps = normalizeFpsValue(dom.controls.animationFps.value);
+      const nextDuration = getDurationFromFps(fps);
+      if (frame) {
+        frame.duration = nextDuration;
+        markHistoryDirty();
+      }
+      updateAnimationFpsDisplay(fps, nextDuration);
     });
 
-    if (dom.controls.animationFps) {
-      dom.controls.animationFps.value = String(Math.round(1000 / getActiveFrame().duration));
-    }
+    dom.controls.applyFpsAll?.addEventListener('click', () => {
+      const fpsInput = dom.controls.animationFps;
+      const fpsValue = fpsInput ? Number(fpsInput.value) : 12;
+      applyFpsToAllFrames(fpsValue);
+    });
+
+    syncAnimationFpsDisplayFromState();
+    updatePlaybackButtons();
 
     renderFrameList();
     renderLayerList();
   }
 
-  function togglePlayback() {
-    if (state.playback.isPlaying) {
-      stopPlayback();
-    } else {
-      startPlayback();
-    }
-  }
-
   function startPlayback() {
     if (state.playback.isPlaying) return;
+    if (!Array.isArray(state.frames) || !state.frames.length) {
+      return;
+    }
     state.playback.isPlaying = true;
-    dom.controls.playAnimation.textContent = '■';
     lastFrameTime = performance.now();
+    updatePlaybackButtons();
     playbackHandle = requestAnimationFrame(stepPlayback);
   }
 
   function stopPlayback() {
     state.playback.isPlaying = false;
-    dom.controls.playAnimation.textContent = '▶';
     if (playbackHandle != null) {
       cancelAnimationFrame(playbackHandle);
       playbackHandle = null;
     }
+    updatePlaybackButtons();
   }
 
   function stepPlayback(timestamp) {
     if (!state.playback.isPlaying) return;
     const frame = getActiveFrame();
+    const duration = frame && Number.isFinite(frame.duration) && frame.duration > 0 ? frame.duration : 1000 / 12;
     const elapsed = timestamp - lastFrameTime;
-    if (elapsed >= frame.duration) {
-      state.activeFrame = (state.activeFrame + 1) % state.frames.length;
-      renderFrameList();
-      renderLayerList();
-      requestRender();
+    if (elapsed >= duration) {
+      stepActiveFrame(1, { wrap: true, persist: false });
       lastFrameTime = timestamp;
     }
     playbackHandle = requestAnimationFrame(stepPlayback);
+  }
+
+  function updatePlaybackButtons() {
+    const isPlaying = state.playback.isPlaying;
+    if (dom.controls.playAnimation) {
+      dom.controls.playAnimation.classList.toggle('is-active', isPlaying);
+      dom.controls.playAnimation.setAttribute('aria-pressed', isPlaying ? 'true' : 'false');
+    }
+    if (dom.controls.stopAnimation) {
+      dom.controls.stopAnimation.disabled = !isPlaying;
+    }
   }
 
   function renderTimelineMatrix() {
@@ -3835,12 +4746,7 @@
 
     container.appendChild(fragment);
 
-    const activeFrame = frames[activeFrameIndex];
-    if (dom.controls.animationFps && activeFrame?.duration) {
-      const frameDuration = Math.max(activeFrame.duration, 1);
-      const fps = clamp(Math.round(1000 / frameDuration), 1, 60);
-      dom.controls.animationFps.value = String(fps);
-    }
+    syncAnimationFpsDisplayFromState();
   }
 
   function renderFrameList() {
