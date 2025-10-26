@@ -1,0 +1,31 @@
+{
+  "name": "pixieedlabo",
+  "version": "1.0.0",
+  "description": "PiXiEEDraw をブラウザから直接操作できるピクセルアートエディターです。PWA 対応とローカル自動保存に対応しています。",
+  "main": "service-worker.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"No tests\"",
+    "cap:init": "npx cap init PiXiEEDraw com.pixieedlabo.app --web-dir . --skip-dependencies",
+    "cap:add:ios": "npx cap add ios",
+    "cap:copy": "npx cap copy",
+    "ios:build": "cd ios/App && xcodebuild -scheme App -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15' build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ReoTsukada/PiXiEEDLabo.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ReoTsukada/PiXiEEDLabo/issues"
+  },
+  "homepage": "https://github.com/ReoTsukada/PiXiEEDLabo#readme",
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.4",
+    "@capacitor/core": "^7.4.4"
+  }
+}
