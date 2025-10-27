@@ -33,15 +33,23 @@ jobs:
           fi
           npx cap copy ios
 
+      - name: Install CocoaPods
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo gem install cocoapods -n /usr/local/bin || true
+          cd ios/App
+          pod install --repo-update
+
       - name: Build with xcodebuild
         shell: bash
         run: |
           set -euo pipefail
           cd ios/App
           if [[ -d "App.xcworkspace" ]]; then
-            xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' build | xcpretty || true
+            xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' build
           else
-            xcodebuild -project App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' build | xcpretty || true
+            xcodebuild -project App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' build
           fi
 
 
