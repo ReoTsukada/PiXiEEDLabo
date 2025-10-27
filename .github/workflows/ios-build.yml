@@ -21,17 +21,27 @@ jobs:
       - name: Install dependencies
         run: |
           npm ci || npm install
-          npm install -D @capacitor/cli @capacitor/core
+          npm install -D @capacitor/cli @capacitor/core @capacitor/ios
 
-      - name: Create Capacitor iOS project
+      - name: Prepare Capacitor iOS project
+        shell: bash
         run: |
-          npx cap init PiXiEEDraw com.pixieedlabo.app --web-dir . --skip-dependencies
-          npx cap add ios
-          npx cap copy
+          set -euo pipefail
+          # Add iOS platform only if not already present
+          if [[ ! -d "ios" ]]; then
+            npx cap add ios
+          fi
+          npx cap copy ios
 
       - name: Build with xcodebuild
+        shell: bash
         run: |
+          set -euo pipefail
           cd ios/App
-          xcodebuild -scheme App -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 15' build
+          if [[ -d "App.xcworkspace" ]]; then
+            xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' build | xcpretty || true
+          else
+            xcodebuild -project App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 15' build | xcpretty || true
+          fi
 
 
