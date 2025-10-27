@@ -23,21 +23,20 @@ jobs:
           npm ci || npm install
           npm install -D @capacitor/cli @capacitor/core @capacitor/ios
 
-      - name: Prepare Capacitor iOS project
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Add iOS platform only if not already present
-          if [[ ! -d "ios" ]]; then
-            npx cap add ios
-          fi
-          npx cap copy ios
-
       - name: Install CocoaPods
         shell: bash
         run: |
           set -euo pipefail
           sudo gem install cocoapods -n /usr/local/bin || true
+
+      - name: Prepare Capacitor iOS project
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d "ios" ]]; then
+            npx cap add ios
+          fi
+          npx cap copy ios
           cd ios/App
           pod install --repo-update
 
